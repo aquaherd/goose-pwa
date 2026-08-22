@@ -80,12 +80,31 @@ function renderMarkdown(src) {
   };
   const flushAll = () => { flushPara(); flushList(); flushQuote(); };
 
-  for (const line of lines) {
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li];
     const trimmed = line.trim();
     const codeM = trimmed.match(/^(\d+)$/);
     if (codeM && codeBlocks[Number(codeM[1])] !== undefined) {
       flushAll();
       out.push(codeBlocks[Number(codeM[1])]);
+      continue;
+    }
+    // pipe table: header row + separator row (+ body rows)
+    if (trimmed.startsWith('|') && li + 1 < lines.length && /^\|[\s:|-]+\|?$/.test(lines[li + 1].trim()) && lines[li + 1].includes('-')) {
+      flushAll();
+      const splitRow = (l) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+      const head = splitRow(trimmed);
+      li++; // separator row
+      const bodyRows = [];
+      while (li + 1 < lines.length && lines[li + 1].trim().startsWith('|')) {
+        li++;
+        bodyRows.push(splitRow(lines[li]));
+      }
+      out.push(
+        '<table><thead><tr>' + head.map((c) => `<th>${c}</th>`).join('') + '</tr></thead><tbody>'
+        + bodyRows.map((r) => '<tr>' + r.map((c) => `<td>${c}</td>`).join('') + '</tr>').join('')
+        + '</tbody></table>',
+      );
       continue;
     }
     const h = trimmed.match(/^(#{1,4})\s+(.*)$/);

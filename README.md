@@ -24,13 +24,16 @@ There is no bridge process.
 ## Quick start
 
 ```sh
-# 1. goose ACP server (pick a strong secret)
-export GOOSE_SERVER__SECRET_KEY="$(openssl rand -hex 24)"
-goose serve --host 127.0.0.1 --port 3284
-
-# 2. caddy (from the project root)
-caddy run --config Caddyfile
+./start.sh          # starts goose serve + caddy (idempotent)
+./start.sh status   # shows state and the secret key
+./start.sh restart  # full restart
+./start.sh stop     # stop both
 ```
+
+The script generates `.env` with a `GOOSE_SERVER__SECRET_KEY` on first run,
+starts `goose serve` on 127.0.0.1:3284 (with `--allowed-origin` for the
+origins listed at the top of the script — edit them there), and runs caddy
+on :8080. Logs go to `./logs/`.
 
 Open `http://<host>:8080` and enter the secret key when prompted
 (it is stored in localStorage and sent as `?token=` on the WebSocket —

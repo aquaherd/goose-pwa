@@ -14,3 +14,6 @@ npm-debug.log*
 Thumbs.db
 *.swp
 *~
+
+# runtime logs
+logs/
