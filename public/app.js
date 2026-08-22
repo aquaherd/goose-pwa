@@ -215,9 +215,9 @@ async function preflight() {
       headers: state.token ? { 'X-Secret-Key': state.token } : {},
     });
     if (res.status === 406) return 'ok';
-    if (res.status === 401 || res.status === 404) return 'auth';
+    if (res.status === 401 || res.status === 404) return 'auth:' + res.status;
     if (res.status === 403) return 'origin';
-    return 'down';
+    return 'down:' + res.status;
   } catch {
     return 'down';
   }
@@ -231,10 +231,11 @@ async function connect() {
   }
 
   const check = await preflight();
-  if (check === 'auth') {
+  if (check.startsWith('auth')) {
     setConnState('down');
+    const code = check.split(':')[1] ?? '';
     showAuthForm(state.token
-      ? 'Secret key rejected — check it and retry:'
+      ? `Secret key rejected (goose answered HTTP ${code}) — check it and retry:`
       : 'Enter the goose server secret key:');
     return;
   }
@@ -247,7 +248,7 @@ async function connect() {
     );
     return;
   }
-  if (check === 'down') {
+  if (check.startsWith('down')) {
     setConnState('down');
     const hint = $('#welcome-hint');
     if (hint) hint.textContent = 'goose unreachable — retrying…';
@@ -947,7 +948,10 @@ function init() {
 
   $('#auth-form').addEventListener('submit', (e) => {
     e.preventDefault();
-    const t = $('#auth-input').value.trim();
+    let t = $('#auth-input').value.trim();
+    // tolerate pasting the whole .env line or a quoted value
+    if (t.includes('=')) t = t.split('=').pop();
+    t = t.replace(/^['"]|['"]$/g, '').trim();
     if (!t) return;
     state.token = t;
     store.set('token', t);
