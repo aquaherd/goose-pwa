@@ -1,0 +1,53 @@
+# goose-pwa — static PWA + reverse proxy to the goose-acp bridge.
+#
+# Run from the project root:
+#   caddy run --config Caddyfile
+#
+# Overridable via environment (adapt-time substitution):
+#   SITE_ADDRESS   listen address            (default ":8080")
+#   SITE_ROOT      static files directory    (default "./public")
+#   BRIDGE_ADDR    bridge upstream           (default "127.0.0.1:8787")
+#
+# iPhone notes:
+#   - Plain HTTP on the LAN works, but the service worker (offline cache)
+#     only registers on a secure context. For full PWA behaviour use HTTPS:
+#       SITE_ADDRESS="goose.example.com"          # real domain, automatic HTTPS
+#     or a LAN name with Caddy's internal CA:
+#       SITE_ADDRESS="https://goose.home.arpa"    # then: tls internal
+#     and install Caddy's root certificate on the iPhone
+#     (Settings > General > About > Certificate Trust Settings).
+{
+	# keep this instance independent from any system-wide caddy
+	admin {$ADMIN_ADDR:127.0.0.1:2018}
+}
+
+{$SITE_ADDRESS::8080} {
+	root * {$SITE_ROOT:./public}
+	encode zstd gzip
+
+	# bridge API (SSE + POST)
+	handle /api/* {
+		reverse_proxy {$BRIDGE_ADDR:127.0.0.1:8787} {
+			flush_interval -1 # stream SSE immediately
+		}
+	}
+
+	# app shell
+	handle {
+		file_server
+	}
+
+	# always fetch fresh app code / manifest
+	header /sw.js Cache-Control "no-cache"
+	header /app.js Cache-Control "no-cache"
+	header /styles.css Cache-Control "no-cache"
+	header /manifest.webmanifest Cache-Control "no-cache"
+	header /manifest.webmanifest Content-Type "application/manifest+json"
+	header /icons/* Cache-Control "public, max-age=604800"
+
+	# security headers
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+	}
+}

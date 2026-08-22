@@ -1,0 +1,16 @@
+# dependencies (none today, but just in case)
+node_modules/
+
+# logs
+*.log
+npm-debug.log*
+
+# environment / secrets
+.env
+.env.*
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*~
