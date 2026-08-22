@@ -184,14 +184,21 @@ function respondToAgent(id, result) {
   }
 }
 
-function requestToken() {
-  const t = window.prompt('Enter the goose server secret key (GOOSE_SERVER__SECRET_KEY):');
-  if (t) {
-    state.token = t.trim();
-    store.set('token', state.token);
-    state.reconnects = 0;
-    connect();
+/* ----- auth (secret key) ----- */
+
+function showAuthForm(message) {
+  const hint = $('#welcome-hint');
+  if (hint) hint.textContent = message;
+  const form = $('#auth-form');
+  if (form) {
+    form.hidden = false;
+    $('#auth-input').focus();
   }
+}
+
+function hideAuthForm() {
+  const form = $('#auth-form');
+  if (form) form.hidden = true;
 }
 
 /* ------------------------------------------------------------------ */
@@ -199,15 +206,18 @@ function requestToken() {
 /* ------------------------------------------------------------------ */
 
 async function preflight() {
-  // GET /acp is not a valid ACP request, but the status code tells us a lot:
-  //   401 -> secret key missing/wrong   403 -> origin not allowed   406 -> auth+origin ok
+  // GET /acp is not a valid ACP request, but the status code tells us a lot.
+  // Same-origin fetch sends no Origin header; with valid secret key goose
+  // answers 406, without it 404. With an Origin header: 401 = bad key,
+  // 403 = origin not allowed.
   try {
     const res = await fetch('/acp', {
       headers: state.token ? { 'X-Secret-Key': state.token } : {},
     });
-    if (res.status === 401) return 'auth';
+    if (res.status === 406) return 'ok';
+    if (res.status === 401 || res.status === 404) return 'auth';
     if (res.status === 403) return 'origin';
-    return 'ok';
+    return 'down';
   } catch {
     return 'down';
   }
@@ -223,7 +233,9 @@ async function connect() {
   const check = await preflight();
   if (check === 'auth') {
     setConnState('down');
-    requestToken();
+    showAuthForm(state.token
+      ? 'Secret key rejected — check it and retry:'
+      : 'Enter the goose server secret key:');
     return;
   }
   if (check === 'origin') {
@@ -237,9 +249,12 @@ async function connect() {
   }
   if (check === 'down') {
     setConnState('down');
+    const hint = $('#welcome-hint');
+    if (hint) hint.textContent = 'goose unreachable — retrying…';
     scheduleReconnect();
     return;
   }
+  hideAuthForm();
 
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const url = `${proto}://${location.host}/acp?token=${encodeURIComponent(state.token ?? '')}`;
@@ -930,6 +945,19 @@ function init() {
     }
   });
 
+  $('#auth-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const t = $('#auth-input').value.trim();
+    if (!t) return;
+    state.token = t;
+    store.set('token', t);
+    hideAuthForm();
+    const hint = $('#welcome-hint');
+    if (hint) hint.textContent = 'Connecting…';
+    state.reconnects = 0;
+    connect();
+  });
+
   $('#btn-send').addEventListener('click', sendPrompt);
   $('#btn-stop').addEventListener('click', cancelPrompt);
   $('#btn-new').addEventListener('click', () => newSession().catch((e) => addSystemMessage(e.message, true)));
@@ -950,6 +978,13 @@ function init() {
   }
 
   if ('serviceWorker' in navigator) {
+    // when a new service worker takes control, reload once to pick up fresh code
+    let reloading = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (reloading) return;
+      reloading = true;
+      location.reload();
+    });
     navigator.serviceWorker.register('/sw.js').catch(() => {});
   }
 }

@@ -128,6 +128,33 @@ html, body {
 .welcome h1 { font-size: 22px; margin: 10px 0 4px; color: var(--text); }
 .welcome p { margin: 0; font-size: 14px; }
 
+#auth-form {
+  margin-top: 16px;
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+#auth-input {
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 16px;
+  width: min(64vw, 260px);
+  outline: none;
+}
+#auth-input:focus { border-color: var(--accent); }
+#auth-submit {
+  border: none;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #fff;
+  padding: 10px 18px;
+  font-size: 15px;
+  cursor: pointer;
+}
+
 .msg {
   max-width: 92%;
   padding: 10px 13px;
