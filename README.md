@@ -84,6 +84,8 @@ Over plain HTTP the app still works, just without offline caching.
   powered by goose's persisted sessions
 - Slash-command completion (`/compact`, `/clear`, …) from
   `available_commands_update`
+- Per-session extension toggles (builtin/platform/MCP) in the settings sheet,
+  via goose's `_goose/unstable/session/extensions/{list,add,remove}` methods
 - Reconnect handling: on socket loss the client reconnects, re-runs
   `initialize` and reloads the session via `session/load`
 - PWA: installable, app-shell cache, safe-area insets, no focus-zoom,

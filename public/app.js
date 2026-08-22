@@ -950,6 +950,74 @@ function openSheet() {
   $('#sheet-title').textContent = 'Session settings';
   $('#sheet').classList.add('open');
   $('#sheet-backdrop').hidden = false;
+
+  // extensions section (loads asynchronously)
+  options.appendChild(el('h2', null, 'Extensions'));
+  const extWrap = el('div');
+  extWrap.appendChild(el('div', 'msg system', 'Loading…'));
+  options.appendChild(extWrap);
+  renderExtensions(extWrap);
+}
+
+const extName = (e) => e?.name ?? e?.server?.name ?? '(unnamed)';
+
+async function renderExtensions(wrap) {
+  try {
+    const [sessRes, cfgRes] = await Promise.all([
+      rpc('_goose/unstable/session/extensions/list', { sessionId: state.sessionId }, { timeoutMs: 20000 }),
+      rpc('_goose/unstable/config/extensions/list', {}, { timeoutMs: 20000 }),
+    ]);
+    const active = new Set((sessRes.extensions || []).map(extName));
+    const rows = new Map(); // name -> { ext, active }
+    for (const entry of cfgRes.extensions || []) {
+      const ext = entry.extension ?? entry;
+      rows.set(extName(ext), { ext, active: false });
+    }
+    for (const ext of sessRes.extensions || []) {
+      const name = extName(ext);
+      const row = rows.get(name) ?? { ext, active: false };
+      row.active = true;
+      rows.set(name, row);
+    }
+    const sorted = [...rows.entries()].sort((a, b) =>
+      a[0].localeCompare(b[0], undefined, { sensitivity: 'base' }));
+
+    wrap.innerHTML = '';
+    if (!sorted.length) {
+      wrap.appendChild(el('div', 'msg system', 'No extensions configured'));
+      return;
+    }
+    for (const [name, { ext, active }] of sorted) {
+      const row = el('div', 'ext-row');
+      const metaEl = el('div', 'ext-meta');
+      const label = ext.display_name || ext.displayName || name;
+      metaEl.appendChild(el('span', 'ext-name', label));
+      metaEl.appendChild(el('span', 'ext-kind', ext.type || ''));
+      if (ext.description) metaEl.appendChild(el('span', 'desc', ext.description));
+      row.appendChild(metaEl);
+      const tog = el('button', 'ext-toggle' + (active ? ' on' : ''), active ? 'On' : 'Off');
+      tog.setAttribute('aria-pressed', String(active));
+      tog.addEventListener('click', async () => {
+        tog.disabled = true;
+        try {
+          if (active) {
+            await rpc('_goose/unstable/session/extensions/remove', { sessionId: state.sessionId, name }, { timeoutMs: 30000 });
+          } else {
+            await rpc('_goose/unstable/session/extensions/add', { sessionId: state.sessionId, extension: ext }, { timeoutMs: 30000 });
+          }
+          await renderExtensions(wrap);
+        } catch (err) {
+          tog.disabled = false;
+          addSystemMessage(`Extension ${active ? 'remove' : 'add'} failed: ${err.message}`, true);
+        }
+      });
+      row.appendChild(tog);
+      wrap.appendChild(row);
+    }
+  } catch (err) {
+    wrap.innerHTML = '';
+    wrap.appendChild(el('div', 'msg system error', `Extensions unavailable: ${err.message}`));
+  }
 }
 
 function closeSheet() {
