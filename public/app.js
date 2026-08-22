@@ -312,14 +312,30 @@ async function newSession() {
 }
 
 async function loadSession(sessionId) {
+  const previousSessionId = state.sessionId;
   closeStream();
   clearChat();
   const loadingEl = addSystemMessage('Loading session…');
-  const result = await rpc('session/load', { sessionId, cwd: state.defaultCwd, mcpServers: [] });
-  loadingEl.remove();
-  state.sessionId = result.sessionId ?? sessionId;
-  applySessionMeta(result);
-  store.set('sessionId', state.sessionId);
+
+  // Point state at the target session *before* the load round-trip so the
+  // history-replay `session/update` notifications goose emits during
+  // `session/load` are not filtered out by handleSessionUpdate() (which drops
+  // updates whose sessionId differs from the current one).
+  state.sessionId = sessionId;
+  store.set('sessionId', sessionId);
+
+  try {
+    const result = await rpc('session/load', { sessionId, cwd: state.defaultCwd, mcpServers: [] });
+    state.sessionId = result.sessionId ?? sessionId;
+    applySessionMeta(result);
+    store.set('sessionId', state.sessionId);
+  } catch (err) {
+    state.sessionId = previousSessionId;
+    store.set('sessionId', previousSessionId);
+    throw err;
+  } finally {
+    loadingEl.remove();
+  }
   closeStream();
   refreshSessionTitle();
 }
