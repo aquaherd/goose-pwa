@@ -1,44 +1,62 @@
 # goose-pwa
 
 An iPhone-friendly PWA frontend for [goose](https://github.com/block/goose),
-talking **ACP (Agent Client Protocol)** to `goose acp`, served by **Caddy**.
+talking **ACP (Agent Client Protocol)** over WebSocket to `goose serve`,
+served by **Caddy**. No build step, no Node, no dependencies — static files
+plus two processes.
 
 ## Architecture
 
 ```
  iPhone (Safari / Home-Screen PWA)
-    │  HTTPS: static files + SSE + POST
+    │  HTTPS: static files + WebSocket
     ▼
  Caddy ──── static: public/
-    │        /api/* → 127.0.0.1:8787   (flush_interval -1 for SSE)
+    │        /acp, /status → 127.0.0.1:3284
     ▼
- bridge/server.mjs  (Node ≥ 18, zero dependencies)
-    │  newline-delimited JSON-RPC 2.0 over stdio (ACP v1)
-    ▼
- goose acp
+ goose serve        (ACP over HTTP/WebSocket, secret-key auth)
 ```
 
-`goose acp` speaks JSON-RPC over stdio, which a browser cannot reach — so a
-small bridge process owns one long-lived `goose acp` child and exposes:
-
-| Endpoint        | Direction      | Purpose                                          |
-| --------------- | -------------- | ------------------------------------------------ |
-| `GET /api/events?since=N` | bridge → browser | SSE stream of every message from goose; replays messages after sequence `N` (reconnect-safe). |
-| `POST /api/send`          | browser → bridge | Any JSON-RPC message (requests *and* responses to agent→client requests). Responses to requests arrive asynchronously via the SSE stream. |
-| `GET /api/health`         | —                | Bridge/agent status.                             |
-
-The bridge performs the ACP `initialize` handshake itself, keeps a replay ring
-buffer (default 2000 messages), restarts goose on crash with backoff, and bumps
-an `epoch` counter so clients resync (re-`session/load`) after a restart.
+The browser speaks ACP (JSON-RPC 2.0) directly to goose's WebSocket endpoint
+(`/acp`). Caddy only serves the app shell and reverse-proxies the socket.
+There is no bridge process.
 
 ## Quick start
 
 ```sh
-npm start              # bridge on 127.0.0.1:8787
-npm run caddy          # caddy on :8080, serving ./public
+# 1. goose ACP server (pick a strong secret)
+export GOOSE_SERVER__SECRET_KEY="$(openssl rand -hex 24)"
+goose serve --host 127.0.0.1 --port 3284
+
+# 2. caddy (from the project root)
+caddy run --config Caddyfile
 ```
 
-Open `http://<host>:8080` — on the iPhone use the LAN IP of the machine.
+Open `http://<host>:8080` and enter the secret key when prompted
+(it is stored in localStorage and sent as `?token=` on the WebSocket —
+the only browser-compatible auth channel).
+
+### Accessing from other machines (iPhone on the LAN)
+
+goose serve rejects WebSocket upgrades whose `Origin` is not loopback.
+Two options:
+
+1. **Allow the origin explicitly** (recommended):
+
+   ```sh
+   goose serve --host 127.0.0.1 --port 3284 \
+     --allowed-origins http://192.168.1.50:8080 \
+     --allowed-origins https://goose.home.arpa
+   ```
+
+   Note: setting `--allowed-origins` *replaces* the default loopback
+   origins — list every origin you use.
+
+2. Or neutralize the origin check at the proxy by uncommenting
+   `header_up Origin "http://127.0.0.1"` in the `handle /acp*` block of the
+   Caddyfile. The secret key remains the real authentication.
+
+The client detects a rejected origin and tells you what to do.
 
 ### Install on iPhone (Add to Home Screen)
 
@@ -63,51 +81,65 @@ Over plain HTTP the app still works, just without offline caching.
   powered by goose's persisted sessions
 - Slash-command completion (`/compact`, `/clear`, …) from
   `available_commands_update`
-- Reconnect-safe: SSE replay buffer + session resync after bridge/goose restart
+- Reconnect handling: on socket loss the client reconnects, re-runs
+  `initialize` and reloads the session via `session/load`
 - PWA: installable, app-shell cache, safe-area insets, no focus-zoom,
   keyboard-aware scrolling
 
-## Configuration (environment)
+## Configuration
 
-Bridge:
+goose serve:
 
-| Variable          | Default       | Meaning                                     |
-| ----------------- | ------------- | ------------------------------------------- |
-| `PORT`            | `8787`        | Bridge listen port                          |
-| `HOST`            | `127.0.0.1`   | Bridge listen address (keep it loopback)    |
-| `GOOSE_BIN`       | `goose`       | Path to the goose binary                    |
-| `GOOSE_CWD`       | bridge cwd    | Default working directory for new sessions  |
-| `GOOSE_PWA_TOKEN` | *(unset)*     | If set, clients must present this bearer token (header or `?token=`) |
-| `BUFFER_SIZE`     | `2000`        | SSE replay buffer entries                   |
+| Setting                     | Meaning                                             |
+| --------------------------- | --------------------------------------------------- |
+| `GOOSE_SERVER__SECRET_KEY`  | Shared secret; required (or `--dangerously-unauthenticated`) |
+| `--host` / `--port`         | Bind address; keep loopback behind Caddy            |
+| `--allowed-origins`         | Exact origins allowed to connect (replaces loopback defaults) |
+| `--tls`                     | Not needed behind Caddy (Caddy terminates TLS)      |
 
-Caddy (adapt-time):
+`public/config.json`:
 
-| Variable        | Default              | Meaning                    |
-| --------------- | -------------------- | -------------------------- |
-| `SITE_ADDRESS`  | `:8080`              | Caddy site address         |
-| `SITE_ROOT`     | `./public`           | Static files root          |
-| `BRIDGE_ADDR`   | `127.0.0.1:8787`     | Bridge upstream            |
+| Key   | Meaning                              |
+| ----- | ------------------------------------ |
+| `cwd` | Default working directory for new sessions |
 
-> **Security:** without `GOOSE_PWA_TOKEN` anyone who can reach the Caddy port
-> can drive your goose agent (which runs shell commands as you). At minimum
-> keep it on a trusted LAN; set a token if exposed further.
+Caddy (adapt-time env):
+
+| Variable            | Default              | Meaning               |
+| ------------------- | -------------------- | --------------------- |
+| `SITE_ADDRESS`      | `:8080`              | Caddy site address    |
+| `SITE_ROOT`         | `./public`           | Static files root     |
+| `GOOSE_SERVE_ADDR`  | `127.0.0.1:3284`     | goose serve upstream  |
+
+> **Security:** anyone with the secret key can drive your goose agent (which
+> runs shell commands as you). Treat the key like a password and prefer HTTPS
+> so it isn't sent in cleartext URLs.
+
+## Known limitations
+
+- If the WebSocket drops **while a prompt is streaming**, the in-flight
+  chunks are lost; the turn still completes server-side and appears after the
+  client reconnects and reloads the session. (goose serve assigns
+  `acp-connection-id`s but offers no browser-usable resumption.)
+- A permission prompt that is pending exactly when the socket dies is
+  stranded; cancel/retry the turn after reconnecting.
 
 ## systemd (optional)
 
 ```ini
-# ~/.config/systemd/user/goose-pwa-bridge.service
+# ~/.config/systemd/user/goose-serve.service
 [Unit]
-Description=goose-pwa bridge
+Description=goose ACP server
 After=network.target
 
 [Service]
-WorkingDirectory=%h/Projects/github/aquaherd/goose-pwa
-Environment=GOOSE_PWA_TOKEN=change-me
-ExecStart=/usr/bin/node bridge/server.mjs
+Environment=GOOSE_SERVER__SECRET_KEY=change-me
+ExecStart=/usr/local/bin/goose serve --host 127.0.0.1 --port 3284
 Restart=on-failure
 
 [Install]
 WantedBy=default.target
 ```
 
-Caddy can run the same way with `ExecStart=/usr/bin/caddy run --config Caddyfile`.
+Caddy can run the same way with
+`ExecStart=/usr/bin/caddy run --config /path/to/Caddyfile`.

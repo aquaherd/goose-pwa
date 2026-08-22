@@ -1,12 +1,15 @@
-/* goose-pwa service worker: app-shell cache, /api is always network. */
+/* goose-pwa service worker: app-shell cache; ACP traffic is never intercepted
+ * (WebSockets bypass service workers entirely; this guards the /acp preflight
+ * GET and /status fetch). */
 
-const VERSION = 'goose-pwa-v1';
+const VERSION = 'goose-pwa-v2';
 const SHELL = [
   '/',
   '/index.html',
   '/styles.css',
   '/app.js',
   '/manifest.webmanifest',
+  '/config.json',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
   '/icons/maskable-512.png',
@@ -28,8 +31,8 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
 
-  // never touch the API (SSE streams, POSTs)
-  if (url.pathname.startsWith('/api/')) return;
+  // never touch ACP traffic
+  if (url.pathname.startsWith('/acp') || url.pathname === '/status') return;
   if (e.request.method !== 'GET') return;
   if (url.origin !== self.location.origin) return;
 

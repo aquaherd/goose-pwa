@@ -1,12 +1,12 @@
-# goose-pwa — static PWA + reverse proxy to the goose-acp bridge.
+# goose-pwa — static PWA + WebSocket reverse proxy to `goose serve`.
 #
 # Run from the project root:
 #   caddy run --config Caddyfile
 #
 # Overridable via environment (adapt-time substitution):
-#   SITE_ADDRESS   listen address            (default ":8080")
-#   SITE_ROOT      static files directory    (default "./public")
-#   BRIDGE_ADDR    bridge upstream           (default "127.0.0.1:8787")
+#   SITE_ADDRESS      listen address          (default ":8080")
+#   SITE_ROOT         static files directory  (default "./public")
+#   GOOSE_SERVE_ADDR  goose serve upstream    (default "127.0.0.1:3284")
 #
 # iPhone notes:
 #   - Plain HTTP on the LAN works, but the service worker (offline cache)
@@ -25,11 +25,20 @@
 	root * {$SITE_ROOT:./public}
 	encode zstd gzip
 
-	# bridge API (SSE + POST)
-	handle /api/* {
-		reverse_proxy {$BRIDGE_ADDR:127.0.0.1:8787} {
-			flush_interval -1 # stream SSE immediately
-		}
+	# ACP over WebSocket, straight to goose serve.
+	# goose checks the Origin header against loopback origins by default;
+	# for LAN/hostname access either start goose serve with
+	#   --allowed-origins https://your.host.name
+	# or uncomment the line below to neutralize the origin check
+	# (the secret key remains the real authentication).
+	handle /acp* {
+		# header_up Origin "http://127.0.0.1"
+		reverse_proxy {$GOOSE_SERVE_ADDR:127.0.0.1:3284}
+	}
+
+	# goose health endpoint
+	handle /status {
+		reverse_proxy {$GOOSE_SERVE_ADDR:127.0.0.1:3284}
 	}
 
 	# app shell
@@ -41,6 +50,7 @@
 	header /sw.js Cache-Control "no-cache"
 	header /app.js Cache-Control "no-cache"
 	header /styles.css Cache-Control "no-cache"
+	header /config.json Cache-Control "no-cache"
 	header /manifest.webmanifest Cache-Control "no-cache"
 	header /manifest.webmanifest Content-Type "application/manifest+json"
 	header /icons/* Cache-Control "public, max-age=604800"
