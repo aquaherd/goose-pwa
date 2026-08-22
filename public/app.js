@@ -1,4 +1,4 @@
-/* goose-pwa client — talks ACP to `goose acp` via the bridge (/api/*). */
+/* goose-pwa client — talks ACP directly to `goose serve` over WebSocket. */
 
 'use strict';
 
@@ -120,12 +120,11 @@ function renderMarkdown(src) {
 /* ------------------------------------------------------------------ */
 
 const state = {
-  token: store.get('token'),
+  token: store.get('token'), // the goose serve secret key (GOOSE_SERVER__SECRET_KEY)
   sessionId: store.get('sessionId'),
   sessionTitle: store.get('sessionTitle', 'Goose'),
-  lastSeq: store.get('lastSeq', 0),
-  epoch: 0,
   defaultCwd: '.',
+  agentInfo: null,
   modes: null,
   configOptions: null,
   commands: [],
@@ -133,41 +132,22 @@ const state = {
   tools: new Map(),   // toolCallId -> {card, body, title}
   stream: null,       // open streaming bubble {kind, el, text}
   busy: false,
-  es: null,
+  ws: null,
   reconnects: 0,
   pinned: true,
-  ready: false,
-  connecting: false,
-  seqDirty: false,
 };
 
 let rpcCounter = 1;
 
 /* ------------------------------------------------------------------ */
-/* RPC over the bridge                                                 */
+/* transport: one WebSocket straight to goose serve (/acp)             */
 /* ------------------------------------------------------------------ */
 
-function authQuery() {
-  return state.token ? `token=${encodeURIComponent(state.token)}` : '';
-}
-
-async function postMessage(msg) {
-  const res = await fetch('/api/send', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      ...(state.token ? { authorization: `Bearer ${state.token}` } : {}),
-    },
-    body: JSON.stringify(msg),
-  });
-  if (res.status === 401) {
-    requestToken();
-    throw new Error('unauthorized');
+function wsSend(msg) {
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+    throw new Error('not connected');
   }
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || `HTTP ${res.status}`);
-  }
+  state.ws.send(JSON.stringify(msg));
 }
 
 function rpc(method, params, { timeoutMs = 10 * 60 * 1000 } = {}) {
@@ -178,101 +158,148 @@ function rpc(method, params, { timeoutMs = 10 * 60 * 1000 } = {}) {
       reject(new Error(`${method}: timed out`));
     }, timeoutMs);
     state.pending.set(id, { resolve, reject, timer, method });
-    postMessage({ jsonrpc: '2.0', id, method, params }).catch((err) => {
+    try {
+      wsSend({ jsonrpc: '2.0', id, method, params });
+    } catch (err) {
       clearTimeout(timer);
       state.pending.delete(id);
       reject(err);
-    });
+    }
   });
 }
 
 function notify(method, params) {
-  return postMessage({ jsonrpc: '2.0', method, params }).catch((err) => {
+  try {
+    wsSend({ jsonrpc: '2.0', method, params });
+  } catch (err) {
     console.warn('notify failed', method, err);
-  });
+  }
 }
 
 function respondToAgent(id, result) {
-  return postMessage({ jsonrpc: '2.0', id, result }).catch((err) => {
+  try {
+    wsSend({ jsonrpc: '2.0', id, result });
+  } catch (err) {
     console.warn('respond failed', err);
-  });
+  }
 }
 
 function requestToken() {
-  const t = window.prompt('This goose-pwa server requires an access token:');
+  const t = window.prompt('Enter the goose server secret key (GOOSE_SERVER__SECRET_KEY):');
   if (t) {
     state.token = t.trim();
     store.set('token', state.token);
-    reconnect();
+    state.reconnects = 0;
+    connect();
   }
 }
 
 /* ------------------------------------------------------------------ */
-/* connection (SSE with replay)                                        */
+/* connection (WebSocket with reconnect + resync)                      */
 /* ------------------------------------------------------------------ */
 
-function connect() {
-  if (state.es) state.es.close();
-  state.connecting = true;
-  const params = new URLSearchParams();
-  if (state.lastSeq) params.set('since', String(state.lastSeq));
-  if (state.token) params.set('token', state.token);
-  const es = new EventSource('/api/events?' + params.toString());
-  state.es = es;
+async function preflight() {
+  // GET /acp is not a valid ACP request, but the status code tells us a lot:
+  //   401 -> secret key missing/wrong   403 -> origin not allowed   406 -> auth+origin ok
+  try {
+    const res = await fetch('/acp', {
+      headers: state.token ? { 'X-Secret-Key': state.token } : {},
+    });
+    if (res.status === 401) return 'auth';
+    if (res.status === 403) return 'origin';
+    return 'ok';
+  } catch {
+    return 'down';
+  }
+}
 
-  es.addEventListener('bridge', (e) => {
-    const hello = JSON.parse(e.data);
-    state.reconnects = 0;
-    state.defaultCwd = hello.defaultCwd || '.';
-    setConnState(hello.state);
+async function connect() {
+  if (state.ws) {
+    state.ws.onclose = null;
+    state.ws.close();
+    state.ws = null;
+  }
 
-    const epochChanged = state.epoch !== 0 && hello.epoch !== state.epoch;
-    state.epoch = hello.epoch;
-
-    if (hello.state === 'ready') {
-      if (epochChanged || hello.gap || !state.ready) {
-        resyncSession();
-      }
-    }
-    const hint = $('#welcome-hint');
-    if (hint) {
-      hint.textContent =
-        hello.state === 'ready'
-          ? `${hello.agentInfo?.name ?? 'goose'} ${hello.agentInfo?.version ?? ''} · ready`
-          : 'goose is starting…';
-    }
-  });
-
-  es.addEventListener('msg', (e) => {
-    state.lastSeq = Number(e.lastEventId) || state.lastSeq;
-    state.seqDirty = true;
-    handleAgentMessage(JSON.parse(e.data));
-  });
-
-  es.onerror = async () => {
+  const check = await preflight();
+  if (check === 'auth') {
     setConnState('down');
-    es.close();
-    state.es = null;
-    // distinguish auth failure from network failure
+    requestToken();
+    return;
+  }
+  if (check === 'origin') {
+    setConnState('down');
+    addSystemMessage(
+      'goose rejected this origin. Restart goose serve with --allowed-origins ' +
+        location.origin + ' (see README).',
+      true,
+    );
+    return;
+  }
+  if (check === 'down') {
+    setConnState('down');
+    scheduleReconnect();
+    return;
+  }
+
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const url = `${proto}://${location.host}/acp?token=${encodeURIComponent(state.token ?? '')}`;
+  const ws = new WebSocket(url);
+  state.ws = ws;
+
+  ws.onopen = async () => {
+    state.reconnects = 0;
     try {
-      const res = await fetch('/api/health', {
-        headers: state.token ? { authorization: `Bearer ${state.token}` } : {},
+      const init = await rpc('initialize', {
+        protocolVersion: 1,
+        clientCapabilities: {
+          fs: { readTextFile: false, writeTextFile: false },
+          terminal: false,
+        },
+        clientInfo: { name: 'goose-pwa', version: '1.0.0' },
       });
-      if (res.status === 401) { requestToken(); return; }
-    } catch { /* server unreachable */ }
-    const delay = Math.min(1500 * 2 ** state.reconnects++, 10000);
-    setTimeout(connect, delay);
+      state.agentInfo = init.agentInfo ?? null;
+      setConnState('ready');
+      const hint = $('#welcome-hint');
+      if (hint) {
+        hint.textContent = `${state.agentInfo?.name ?? 'goose'} ${state.agentInfo?.version ?? ''} · ready`;
+      }
+      await ensureSession();
+    } catch (err) {
+      addSystemMessage(`initialize failed: ${err.message}`, true);
+      ws.close();
+    }
   };
+
+  ws.onmessage = (e) => {
+    let msg;
+    try {
+      msg = JSON.parse(e.data);
+    } catch {
+      return;
+    }
+    handleAgentMessage(msg);
+  };
+
+  ws.onclose = () => {
+    if (state.ws !== ws) return; // superseded by a newer connection
+    state.ws = null;
+    setConnState('down');
+    // fail all in-flight requests so the UI unblocks
+    for (const [id, p] of state.pending) {
+      clearTimeout(p.timer);
+      p.reject(new Error('connection lost'));
+    }
+    state.pending.clear();
+    scheduleReconnect();
+  };
+
+  ws.onerror = () => ws.close();
 }
 
-function reconnect() {
-  state.reconnects = 0;
-  connect();
+function scheduleReconnect() {
+  const delay = Math.min(1500 * 2 ** state.reconnects++, 10000);
+  setTimeout(connect, delay);
 }
-
-setInterval(() => {
-  if (state.seqDirty) { store.set('lastSeq', state.lastSeq); state.seqDirty = false; }
-}, 1000);
 
 function setConnState(s) {
   const dot = $('#conn-dot');
@@ -348,11 +375,6 @@ function applySessionMeta(result) {
   if (result?.configOptions) state.configOptions = result.configOptions;
 }
 
-async function resyncSession() {
-  state.ready = true;
-  await ensureSession();
-}
-
 async function refreshSessionTitle() {
   try {
     const { sessions } = await rpc('session/list', {}, { timeoutMs: 15000 });
@@ -412,11 +434,13 @@ function handleAgentMessage(msg) {
 }
 
 function respondToAgentError(id) {
-  postMessage({
-    jsonrpc: '2.0',
-    id,
-    error: { code: -32601, message: 'Method not found' },
-  }).catch(() => {});
+  try {
+    wsSend({
+      jsonrpc: '2.0',
+      id,
+      error: { code: -32601, message: 'Method not found' },
+    });
+  } catch { /* not connected */ }
 }
 
 function handleSessionUpdate({ sessionId, update }) {
@@ -890,6 +914,13 @@ function closeSheet() {
 function init() {
   renderTitle();
 
+  // deployment config (default cwd for new sessions)
+  fetch('/config.json')
+    .then((r) => (r.ok ? r.json() : {}))
+    .then((c) => { if (c.cwd) state.defaultCwd = c.cwd; })
+    .catch(() => {})
+    .finally(connect);
+
   const input = $('#input');
   input.addEventListener('input', () => { autoGrow(); updateSlashMenu(); });
   input.addEventListener('keydown', (e) => {
@@ -917,8 +948,6 @@ function init() {
   if (window.visualViewport) {
     window.visualViewport.addEventListener('resize', () => maybeScroll());
   }
-
-  connect();
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(() => {});
