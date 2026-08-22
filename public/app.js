@@ -920,7 +920,12 @@ function openSheet() {
     if (cfg.id === 'mode') continue;     // already rendered from state.modes above
     if (!Array.isArray(cfg.options) || !cfg.options.length) continue;
     options.appendChild(el('h2', null, cfg.name || cfg.id));
-    for (const opt of cfg.options) {
+    // sort models case-insensitively; keep semantic order for e.g. thinking effort
+    const opts = cfg.id === 'model'
+      ? [...cfg.options].sort((a, b) =>
+          (a.name || a.value).localeCompare(b.name || b.value, undefined, { sensitivity: 'base' }))
+      : cfg.options;
+    for (const opt of opts) {
       const btn = el('button', 'sheet-option' + (opt.value === cfg.currentValue ? ' selected' : ''));
       btn.appendChild(el('span', null, opt.name || opt.value));
       if (opt.description) btn.appendChild(el('span', 'desc', opt.description));
