@@ -32,8 +32,7 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
 
   // never touch ACP traffic
-  if (url.pathname.startsWith('/acp') || url.pathname === '/status') return;
-  if (e.request.method !== 'GET') return;
+  if (url.pathname.startsWith('/acp') || url.pathname === '/status') return;  if (e.request.method !== 'GET') return;
   if (url.origin !== self.location.origin) return;
 
   e.respondWith(

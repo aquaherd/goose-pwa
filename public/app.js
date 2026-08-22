@@ -206,12 +206,10 @@ function hideAuthForm() {
 /* ------------------------------------------------------------------ */
 
 async function preflight() {
-  // GET /acp is not a valid ACP request, but the status code tells us a lot.
-  // Same-origin fetch sends no Origin header; with valid secret key goose
-  // answers 406, without it 404. With an Origin header: 401 = bad key,
-  // 403 = origin not allowed.
+  // GET /acp-preflight (Caddy strips Origin and forwards to /acp):
+  //   406 = key ok   404/401 = key missing/wrong   403 = origin rejected
   try {
-    const res = await fetch('/acp', {
+    const res = await fetch('/acp-preflight', {
       headers: state.token ? { 'X-Secret-Key': state.token } : {},
     });
     if (res.status === 406) return 'ok';
@@ -242,7 +240,7 @@ async function connect() {
   if (check === 'origin') {
     setConnState('down');
     addSystemMessage(
-      'goose rejected this origin. Restart goose serve with --allowed-origins ' +
+      'goose rejected this origin. Restart goose serve with --allowed-origin ' +
         location.origin + ' (see README).',
       true,
     );
@@ -261,8 +259,10 @@ async function connect() {
   const url = `${proto}://${location.host}/acp?token=${encodeURIComponent(state.token ?? '')}`;
   const ws = new WebSocket(url);
   state.ws = ws;
+  let opened = false;
 
   ws.onopen = async () => {
+    opened = true;
     state.reconnects = 0;
     try {
       const init = await rpc('initialize', {
@@ -300,6 +300,16 @@ async function connect() {
     if (state.ws !== ws) return; // superseded by a newer connection
     state.ws = null;
     setConnState('down');
+    if (!opened) {
+      // preflight passed (key ok) but the socket never opened: origin rejected
+      addSystemMessage(
+        'goose rejected this origin. Restart goose serve with --allowed-origin ' +
+          location.origin + ' (see README).',
+        true,
+      );
+      scheduleReconnect();
+      return;
+    }
     // fail all in-flight requests so the UI unblocks
     for (const [id, p] of state.pending) {
       clearTimeout(p.timer);

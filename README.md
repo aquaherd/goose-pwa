@@ -45,11 +45,11 @@ Two options:
 
    ```sh
    goose serve --host 127.0.0.1 --port 3284 \
-     --allowed-origins http://192.168.1.50:8080 \
-     --allowed-origins https://goose.home.arpa
+     --allowed-origin http://192.168.1.50:8080 \
+     --allowed-origin https://goose.home.arpa
    ```
 
-   Note: setting `--allowed-origins` *replaces* the default loopback
+   Note: setting `--allowed-origin` *replaces* the default loopback
    origins — list every origin you use.
 
 2. Or neutralize the origin check at the proxy by uncommenting
@@ -94,7 +94,7 @@ goose serve:
 | --------------------------- | --------------------------------------------------- |
 | `GOOSE_SERVER__SECRET_KEY`  | Shared secret; required (or `--dangerously-unauthenticated`) |
 | `--host` / `--port`         | Bind address; keep loopback behind Caddy            |
-| `--allowed-origins`         | Exact origins allowed to connect (replaces loopback defaults) |
+| `--allowed-origin`         | Exact origins allowed to connect (replaces loopback defaults) |
 | `--tls`                     | Not needed behind Caddy (Caddy terminates TLS)      |
 
 `public/config.json`:
