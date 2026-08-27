@@ -119,6 +119,10 @@ html, body {
   gap: 10px;
 }
 
+/* never let flex-shrink squash cards when the chat overflows the viewport
+   (overflow:hidden items would otherwise collapse to their borders) */
+#chat > * { flex: none; }
+
 .welcome {
   margin: auto;
   text-align: center;
