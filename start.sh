@@ -15,6 +15,12 @@ cd "$(dirname "$0")"
 
 GOOSE_HOST=127.0.0.1
 GOOSE_PORT=3284
+# Default thinking effort for NEW sessions (off|low|medium|high|max).
+# Every new session starts at this value; it can still be changed per session
+# from the PWA "Session settings" sheet. Override in .env to keep it.
+GOOSE_THINKING_EFFORT="${GOOSE_THINKING_EFFORT:-off}"
+export GOOSE_THINKING_EFFORT
+
 ORIGINS=(
   "http://omv.fritz.box:8080"
   "https://omv.fritz.box"
