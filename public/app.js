@@ -563,8 +563,9 @@ function addSystemMessage(text, isError = false) {
 
 function closeStream() {
   if (!state.stream) return;
-  const { kind, el: bubble, text } = state.stream;
+  const { kind, el: bubble, text, wrap } = state.stream;
   bubble.classList.remove('typing');
+  if (wrap) wrap.classList.remove('streaming');
   if (kind === 'agent') bubble.innerHTML = renderMarkdown(text);
   state.stream = null;
 }
@@ -586,11 +587,28 @@ function appendChunk(kind, content) {
     }
   } else {
     closeStream();
-    const bubble = el('div', `msg ${kind} typing`);
-    if (kind === 'agent') bubble.innerHTML = renderMarkdown(text);
-    else bubble.textContent = text;
-    chat().appendChild(bubble);
-    state.stream = { kind, el: bubble, text };
+    if (kind === 'thought') {
+      // collapsed-by-default card; tap the header to reveal/hide the thought
+      const wrap = el('div', 'msg thought streaming');
+      const head = el('div', 'thought-head');
+      head.appendChild(el('span', 'thought-label', 'Thinking'));
+      head.appendChild(el('span', 'thought-chevron', '›'));
+      const body = el('div', 'thought-body', text);
+      wrap.appendChild(head);
+      wrap.appendChild(body);
+      head.addEventListener('click', () => {
+        wrap.classList.toggle('open');
+        maybeScroll();
+      });
+      chat().appendChild(wrap);
+      state.stream = { kind, el: body, text, wrap };
+    } else {
+      const bubble = el('div', `msg ${kind} typing`);
+      if (kind === 'agent') bubble.innerHTML = renderMarkdown(text);
+      else bubble.textContent = text;
+      chat().appendChild(bubble);
+      state.stream = { kind, el: bubble, text };
+    }
   }
   maybeScroll();
 }

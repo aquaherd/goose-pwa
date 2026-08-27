@@ -186,8 +186,50 @@ html, body {
   border: 1px dashed var(--border);
   color: var(--text-dim);
   font-size: 13.5px;
-  font-style: italic;
+  padding: 0; /* head/body provide their own padding */
+  overflow: hidden;
 }
+
+.thought-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.thought-label {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-style: italic;
+  letter-spacing: 0.02em;
+}
+
+/* blinking dot next to the label while the thought is streaming */
+.msg.thought.streaming .thought-label::after {
+  content: "";
+  display: inline-block;
+  width: 4px; height: 4px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  animation: blink 1s infinite;
+}
+
+.thought-chevron { color: var(--text-dim); transition: transform 0.15s; flex: none; }
+.msg.thought.open .thought-chevron { transform: rotate(90deg); }
+
+.thought-body {
+  display: none;
+  border-top: 1px dashed var(--border);
+  padding: 8px 12px;
+  font-style: italic;
+  white-space: pre-wrap;
+}
+.msg.thought.open .thought-body { display: block; }
 
 .msg.system {
   align-self: center;
