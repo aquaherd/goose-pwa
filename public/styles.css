@@ -279,8 +279,12 @@ html, body {
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 10px 12px;
-  overflow-x: auto;
   margin: 8px 0;
+  /* wrap long lines instead of forcing horizontal scrolling on phones;
+     break only at word boundaries unless a single token overflows */
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  overflow-x: hidden;
 }
 .msg pre code { background: none; padding: 0; font-size: 13px; }
 .msg a { color: var(--accent); }
