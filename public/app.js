@@ -147,6 +147,7 @@ const state = {
   modes: null,
   configOptions: null,
   commands: [],
+  sessionList: null,
   pending: new Map(), // rpc id -> {resolve, reject, timer, method}
   tools: new Map(),   // toolCallId -> {card, body, title}
   stream: null,       // open streaming bubble {kind, el, text}
@@ -873,67 +874,123 @@ function closeDrawer() {
 
 async function loadSessionList() {
   const list = $('#session-list');
-  list.innerHTML = '';
-  list.appendChild(el('div', 'msg system', 'Loading…'));
+  const hasRows = [...list.children].some((c) => c.dataset && c.dataset.sessionId);
+  if (!hasRows) {
+    list.innerHTML = '';
+    list.appendChild(el('div', 'msg system', 'Loading…'));
+  }
   try {
     const { sessions } = await rpc('session/list', {}, { timeoutMs: 20000 });
-    list.innerHTML = '';
-    if (!sessions?.length) {
-      list.appendChild(el('div', 'msg system', 'No sessions yet'));
-      return;
-    }
-    for (const s of sessions) {
-      const item = el('div', 'session-item' + (s.sessionId === state.sessionId ? ' current' : ''));
-      const meta = el('div', 'session-meta');
-      meta.appendChild(el('div', 'session-name', s.title || s.sessionId));
-      const when = s.updatedAt ? new Date(s.updatedAt).toLocaleString() : '';
-      const count = s._meta?.messageCount ? ` · ${s._meta.messageCount} msgs` : '';
-      meta.appendChild(el('div', 'session-sub', when + count));
-      item.appendChild(meta);
-      const del = el('button', 'session-del', '✕');
-      del.title = 'Delete session';
-      del.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        if (!confirm(`Delete "${s.title || s.sessionId}"?`)) return;
-        del.disabled = true;
-        del.textContent = '…';
-        try {
-          await rpc('session/delete', { sessionId: s.sessionId }, { timeoutMs: 20000 });
-          // drop the row immediately; refresh the list on its own so a slow or
-          // failed session/new can never leave a deleted entry in the drawer
-          item.remove();
-          loadSessionList().catch(() => {});
-          if (s.sessionId === state.sessionId) {
-            state.sessionId = null;
-            try {
-              await newSession();
-            } catch (err) {
-              addSystemMessage(`New session after delete failed: ${err.message}`, true);
-            }
-          }
-        } catch (err) {
-          del.disabled = false;
-          del.textContent = '✕';
-          addSystemMessage(`Delete failed: ${err.message}`, true);
-        }
-      });
-      item.appendChild(del);
-      item.addEventListener('click', async () => {
-        closeDrawer();
-        if (s.sessionId === state.sessionId) return;
-        try {
-          await loadSession(s.sessionId);
-        } catch (err) {
-          addSystemMessage(`Load failed: ${err.message}`, true);
-        }
-      });
-      list.appendChild(item);
-    }
+    state.sessionList = sessions || [];
+    renderSessionList();
   } catch (err) {
-    list.innerHTML = '';
-    list.appendChild(el('div', 'msg system error', err.message));
+    if (!hasRows) {
+      list.innerHTML = '';
+      list.appendChild(el('div', 'msg system error', err.message));
+    } else {
+      console.warn('session list refresh failed', err);
+    }
   }
 }
+
+// Incremental drawer render keyed by sessionId: the container is never
+// rebuilt, so the scroll position survives refreshes; only rows whose
+// content, order or selection changed are touched.
+function renderSessionList() {
+  const list = $('#session-list');
+  const order = state.sessionList || [];
+  if (!order.length) {
+    list.innerHTML = '';
+    list.appendChild(el('div', 'msg system', 'No sessions yet'));
+    return;
+  }
+  for (const n of [...list.children]) {
+    if (!n.dataset || !n.dataset.sessionId) n.remove();
+  }
+  const existing = new Map();
+  for (const n of list.children) {
+    if (n.dataset && n.dataset.sessionId) existing.set(n.dataset.sessionId, n);
+  }
+  let cursor = null;
+  for (const s of order) {
+    let item = existing.get(s.sessionId);
+    if (item) {
+      updateSessionItem(item, s);
+    } else {
+      item = el('div', 'session-item');
+      item.dataset.sessionId = s.sessionId;
+      buildSessionItem(item, s);
+    }
+    // keep DOM order in sync with the server order without rebuilding
+    list.insertBefore(item, cursor ? cursor.nextSibling : list.firstChild);
+    cursor = item;
+  }
+  for (const [id, node] of existing) {
+    if (!order.some((s) => s.sessionId === id)) node.remove();
+  }
+}
+
+function buildSessionItem(item, s) {
+  const meta = el('div', 'session-meta');
+  meta.appendChild(el('div', 'session-name', s.title || s.sessionId));
+  meta.appendChild(el('div', 'session-sub', formatSessionSub(s)));
+  item.replaceChildren(meta);
+  item.classList.toggle('current', s.sessionId === state.sessionId);
+  const del = el('button', 'session-del', '✕');
+  del.title = 'Delete session';
+  del.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (!confirm(`Delete "${s.title || s.sessionId}"?`)) return;
+    del.disabled = true;
+    del.textContent = '…';
+    try {
+      await rpc('session/delete', { sessionId: s.sessionId }, { timeoutMs: 20000 });
+      item.remove(); // drop immediately; the refresh below reconciles the rest
+      loadSessionList().catch(() => {});
+      if (s.sessionId === state.sessionId) {
+        state.sessionId = null;
+        try {
+          await newSession();
+        } catch (err) {
+          addSystemMessage(`New session after delete failed: ${err.message}`, true);
+        }
+      }
+    } catch (err) {
+      del.disabled = false;
+      del.textContent = '✕';
+      addSystemMessage(`Delete failed: ${err.message}`, true);
+    }
+  });
+  item.appendChild(del);
+  item.onclick = async () => {
+    closeDrawer();
+    if (s.sessionId === state.sessionId) return;
+    try {
+      await loadSession(s.sessionId);
+    } catch (err) {
+      addSystemMessage(`Load failed: ${err.message}`, true);
+    }
+  };
+}
+
+function formatSessionSub(s) {
+  const when = s.updatedAt ? new Date(s.updatedAt).toLocaleString() : '';
+  const count = s._meta?.messageCount ? ` · ${s._meta.messageCount} msgs` : '';
+  return when + count;
+}
+
+function updateSessionItem(item, s) {
+  const name = item.querySelector('.session-name');
+  const sub = item.querySelector('.session-sub');
+  const current = s.sessionId === state.sessionId;
+  if (!name || !sub) { buildSessionItem(item, s); return; }
+  if (name.textContent !== (s.title || s.sessionId)
+      || sub.textContent !== formatSessionSub(s)
+      || item.classList.contains('current') !== current) {
+    buildSessionItem(item, s);
+  }
+}
+
 
 /* ------------------------------------------------------------------ */
 /* bottom sheet (mode / model / thinking)                              */
