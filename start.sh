@@ -39,6 +39,7 @@ set -a; source ./.env; set +a
 
 goose_running() { curl -sf --max-time 2 "http://$GOOSE_HOST:$GOOSE_PORT/status" >/dev/null 2>&1; }
 caddy_ok()      { curl -sf --max-time 2 -o /dev/null "http://127.0.0.1:8080/" 2>/dev/null; }
+tls_ok()        { curl -skf --max-time 2 -o /dev/null "https://127.0.0.1/" 2>/dev/null; }
 
 stop_all() {
   pkill -u "$USER" -f "^goose serve " 2>/dev/null && echo "stopped goose serve" || true
@@ -72,9 +73,9 @@ start_caddy() {
   fi
   if (( running == 1 )) && caddy_ok; then echo "caddy: already running on :8080"; return; fi
   setsid nohup caddy run --config Caddyfile >>logs/caddy.log 2>&1 < /dev/null &
-  for _ in $(seq 1 20); do caddy_ok && break; sleep 0.5; done
-  if caddy_ok; then
-    echo "caddy: up on :8080"
+  for _ in $(seq 1 20); do caddy_ok || tls_ok && break; sleep 0.5; done
+  if caddy_ok || tls_ok; then
+    echo "caddy: up on :8080 (+ https :443)"
   else
     echo "caddy: FAILED — see logs/caddy.log" >&2; exit 1
   fi
@@ -82,7 +83,9 @@ start_caddy() {
 
 cmd_status() {
   if goose_running; then echo "goose serve: up (:$GOOSE_PORT)"; else echo "goose serve: DOWN"; fi
-  if caddy_ok; then echo "caddy: up (:8080)"; else echo "caddy: DOWN"; fi
+  if caddy_ok && tls_ok; then echo "caddy: up (:8080 + https :443)"
+  elif caddy_ok || tls_ok; then echo "caddy: up (partial — check logs/caddy.log)"
+  else echo "caddy: DOWN"; fi
   if goose_running && caddy_ok; then
     echo "secret: $GOOSE_SERVER__SECRET_KEY"
   fi

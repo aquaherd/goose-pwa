@@ -39,6 +39,35 @@ Open `http://<host>:8080` and enter the secret key when prompted
 (it is stored in localStorage and sent as `?token=` on the WebSocket —
 the only browser-compatible auth channel).
 
+## HTTPS (self-signed) — real PWA install on iPhone
+
+Plain http works for browsing, but iOS only installs a full PWA (service
+worker + `display-mode: standalone`, no Safari bottom bar) from a
+**trusted https** origin. The repo includes a self-signed setup:
+
+1. Generate the certificate once (see `scripts/make-cert.sh`):
+   ```sh
+   openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 825 \
+     -keyout certs/server.key -out certs/server.crt \
+     -subj "/CN=omv.fritz.box" \
+     -addext "subjectAltName=DNS:omv.fritz.box,DNS:localhost,IP:127.0.0.1"
+   ```
+2. Allow caddy to bind :443 as your user (one-time):
+   ```sh
+   sudo setcap cap_net_bind_service=+ep "$(command -v caddy)"
+   ```
+   Then `./start.sh restart` — caddy serves both `http://<host>:8080`
+   and `https://omv.fritz.box`.
+3. Trust the cert on the iPhone (once):
+   - open `http://omv.fritz.box:8080/cert.crt` in Safari,
+   - install the profile, then enable full trust in
+     **Settings → General → About → Certificate Trust Settings**.
+4. Open `https://omv.fritz.box`, enter the secret key, then
+   **Add to Home Screen** — a proper full-screen PWA install.
+
+The http `:8080` listener stays available as fallback and for the
+certificate bootstrap download.
+
 ### Accessing from other machines (iPhone on the LAN)
 
 goose serve rejects WebSocket upgrades whose `Origin` is not loopback.

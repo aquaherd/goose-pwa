@@ -4,70 +4,87 @@
 #   caddy run --config Caddyfile
 #
 # Overridable via environment (adapt-time substitution):
-#   SITE_ADDRESS      listen address          (default ":8080")
-#   SITE_ROOT         static files directory  (default "./public")
-#   GOOSE_SERVE_ADDR  goose serve upstream    (default "127.0.0.1:3284")
+#   SITE_ADDRESS      http  listen address       (default ":8080")
+#   SITE_ROOT         static files directory     (default "./public")
+#   GOOSE_SERVE_ADDR  goose serve upstream       (default "127.0.0.1:3284")
+#   TLS_SITE          https hostname             (default "omv.fritz.box")
+#   TLS_CERT / TLS_KEY  self-signed cert paths   (default certs/server.crt|key)
+#   TLS_CERT_DIR      dir served at /cert.crt    (default certs)
 #
-# iPhone notes:
-#   - Plain HTTP on the LAN works, but the service worker (offline cache)
-#     only registers on a secure context. For full PWA behaviour use HTTPS:
-#       SITE_ADDRESS="goose.example.com"          # real domain, automatic HTTPS
-#     or a LAN name with Caddy's internal CA:
-#       SITE_ADDRESS="https://goose.home.arpa"    # then: tls internal
-#     and install Caddy's root certificate on the iPhone
-#     (Settings > General > About > Certificate Trust Settings).
+# HTTPS (self-signed): the site below serves https://<TLS_SITE> on :443 with
+# certs/server.{crt,key} (generate: see scripts/make-cert.sh or README).
+# On the iPhone, install certs/server.crt first (http://<host>:8080/cert.crt),
+# then enable full trust in Settings > General > About > Certificate Trust
+# Settings. A trusted https origin gives a real PWA install (service worker +
+# display-mode: standalone), which reclaims the bottom strip.
+
 {
-	# keep this instance independent from any system-wide caddy
-	admin {$ADMIN_ADDR:127.0.0.1:2018}
+        # keep this instance independent from any system-wide caddy
+        admin {$ADMIN_ADDR:127.0.0.1:2018}
+
+        # don't open a :80 listener for http->https redirects: our http site
+        # lives on :8080 and port 80 belongs to the system web UI
+        auto_https disable_redirects
 }
 
+(app) {
+        root * {$SITE_ROOT:./public}
+        encode zstd gzip
+
+        # ACP over WebSocket, straight to goose serve.
+        handle /acp* {
+                reverse_proxy {$GOOSE_SERVE_ADDR:127.0.0.1:3284}
+        }
+
+        # Auth preflight for the UI: goose 404s any non-upgrade GET that carries
+        # an Origin header, so strip it for a reliable 406/404.
+        handle /acp-preflight {
+                rewrite * /acp
+                reverse_proxy {$GOOSE_SERVE_ADDR:127.0.0.1:3284} {
+                        header_up -Origin
+                }
+        }
+
+        # goose health endpoint
+        handle /status {
+                reverse_proxy {$GOOSE_SERVE_ADDR:127.0.0.1:3284}
+        }
+
+        # self-signed root certificate, for one-time iPhone trust bootstrap
+        handle /cert.crt {
+                rewrite * /server.crt
+                root * {$TLS_CERT_DIR:certs}
+                file_server
+        }
+
+        # app shell
+        handle {
+                file_server
+        }
+
+        # always fetch fresh app code / manifest
+        header /sw.js Cache-Control "no-cache"
+        header /app.js Cache-Control "no-cache"
+        header /styles.css Cache-Control "no-cache"
+        header /config.json Cache-Control "no-cache"
+        header /manifest.webmanifest Cache-Control "no-cache"
+        header /manifest.webmanifest Content-Type "application/manifest+json"
+        header /icons/* Cache-Control "public, max-age=604800"
+
+        # security headers
+        header {
+                X-Content-Type-Options nosniff
+                Referrer-Policy no-referrer
+        }
+}
+
+# plain HTTP on the LAN (also the /cert.crt bootstrap endpoint)
 {$SITE_ADDRESS::8080} {
-	root * {$SITE_ROOT:./public}
-	encode zstd gzip
+        import app
+}
 
-	# ACP over WebSocket, straight to goose serve.
-	# goose checks the Origin header against loopback origins by default;
-	# for LAN/hostname access either start goose serve with
-	#   --allowed-origin https://your.host.name
-	# or uncomment the line below to neutralize the origin check
-	# (the secret key remains the real authentication).
-	handle /acp* {
-		# header_up Origin "http://127.0.0.1"
-		reverse_proxy {$GOOSE_SERVE_ADDR:127.0.0.1:3284}
-	}
-
-	# Auth preflight for the UI: goose 404s any non-upgrade GET that carries
-	# an Origin header (some browsers send one even same-origin), so strip it
-	# here to get a reliable 406 (key ok) / 404 (key missing or wrong).
-	handle /acp-preflight {
-		rewrite * /acp
-		reverse_proxy {$GOOSE_SERVE_ADDR:127.0.0.1:3284} {
-			header_up -Origin
-		}
-	}
-
-	# goose health endpoint
-	handle /status {
-		reverse_proxy {$GOOSE_SERVE_ADDR:127.0.0.1:3284}
-	}
-
-	# app shell
-	handle {
-		file_server
-	}
-
-	# always fetch fresh app code / manifest
-	header /sw.js Cache-Control "no-cache"
-	header /app.js Cache-Control "no-cache"
-	header /styles.css Cache-Control "no-cache"
-	header /config.json Cache-Control "no-cache"
-	header /manifest.webmanifest Cache-Control "no-cache"
-	header /manifest.webmanifest Content-Type "application/manifest+json"
-	header /icons/* Cache-Control "public, max-age=604800"
-
-	# security headers
-	header {
-		X-Content-Type-Options nosniff
-		Referrer-Policy no-referrer
-	}
+# HTTPS with the self-signed certificate
+https://{$TLS_SITE:omv.fritz.box} {
+        tls {$TLS_CERT:certs/server.crt} {$TLS_KEY:certs/server.key}
+        import app
 }
