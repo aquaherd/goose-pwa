@@ -60,6 +60,15 @@
                 file_server
         }
 
+        # CRL referenced by the server leaf so iOS gets a conclusive
+        # revocation answer instead of "inconclusive"
+        @crl path /crl.pem
+        handle @crl {
+                rewrite * /ca.crl
+                root * {$TLS_CERT_DIR:certs}
+                file_server
+        }
+
         # app shell
         handle {
                 file_server

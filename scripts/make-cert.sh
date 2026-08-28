@@ -39,7 +39,31 @@ openssl x509 -req -in /tmp/goose-pwa-server.csr -CA certs/ca.crt -CAkey certs/ca
   -CAcreateserial -days 825 -sha256 -out certs/server.crt \
   -extfile /tmp/goose-pwa-leaf.ext
 rm -f /tmp/goose-pwa-server.csr /tmp/goose-pwa-leaf.ext
+# CRL for the leaf's CRLDistributionPoints (served at /crl.pem); expiry
+# matches the certificate lifetime so iOS never sees an expired CRL.
+mkdir -p /tmp/goose-pwa-crl/newcerts
+: > /tmp/goose-pwa-crl/index.txt
+echo 1000 > /tmp/goose-pwa-crl/serial
+cat > /tmp/goose-pwa-crl.cnf <<CNF
+[ ca ]
+default_ca = CA_default
+[ CA_default ]
+dir = /tmp/goose-pwa-crl
+database = /tmp/goose-pwa-crl/index.txt
+new_certs_dir = /tmp/goose-pwa-crl/newcerts
+certificate = certs/ca.crt
+private_key = certs/ca.key
+serial = /tmp/goose-pwa-crl/serial
+default_md = sha256
+policy = policy_any
+[ policy_any ]
+commonName = supplied
+[ crl_ext ]
+authorityKeyIdentifier = keyid:always
+CNF
+openssl ca -gencrl -config /tmp/goose-pwa-crl.cnf -out certs/ca.crl -crldays 825
+
 chmod 600 certs/ca.key certs/server.key
-echo "wrote certs/ca.{crt,key} + certs/server.{crt,key} for $host"
+echo "wrote certs/ca.{crt,key} + certs/server.{crt,key} + certs/ca.crl for $host"
 echo "install certs/ca.crt on the iPhone (use /cert.crt), enable full trust"
 echo "then restart caddy: ./start.sh restart"
