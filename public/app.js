@@ -936,16 +936,21 @@ function openSheet() {
     options.appendChild(el('h2', null, 'Mode'));
     for (const m of state.modes.availableModes) {
       const btn = el('button', 'sheet-option' + (m.id === state.modes.currentModeId ? ' selected' : ''));
+      btn.dataset.cfg = 'mode';
+      btn.dataset.value = m.id;
       btn.appendChild(el('span', null, m.name || m.id));
       if (m.description) btn.appendChild(el('span', 'desc', m.description));
       btn.addEventListener('click', async () => {
-        closeSheet();
         try {
           await rpc('session/set_mode', { sessionId: state.sessionId, modeId: m.id });
           state.modes.currentModeId = m.id;
           renderModePill(m.id);
+          highlightSheetSelection();
+          sheetToast(`Mode: ${m.name || m.id}`);
         } catch (err) {
           addSystemMessage(`Set mode failed: ${err.message}`, true);
+          const errRow = el('div', 'msg system error', `Set mode failed: ${err.message}`);
+          options.insertBefore(errRow, options.firstChild);
         }
       });
       options.appendChild(btn);
@@ -964,6 +969,8 @@ function openSheet() {
       : cfg.options;
     for (const opt of opts) {
       const btn = el('button', 'sheet-option' + (opt.value === cfg.currentValue ? ' selected' : ''));
+      btn.dataset.cfg = cfg.id;
+      btn.dataset.value = opt.value;
       btn.appendChild(el('span', null, opt.name || opt.value));
       if (opt.description) btn.appendChild(el('span', 'desc', opt.description));
       btn.addEventListener('click', async () => {
@@ -976,7 +983,8 @@ function openSheet() {
           if (r?.configOptions) state.configOptions = r.configOptions;
           if (cfg.id === 'thinking_effort') store.set('thinkingEffort', opt.value);
           addSystemMessage(`${cfg.name || cfg.id}: ${opt.name || opt.value}`);
-          closeSheet();
+          highlightSheetSelection();
+          sheetToast(`${cfg.name || cfg.id}: ${opt.name || opt.value}`);
         } catch (err) {
           addSystemMessage(`Set ${cfg.id} failed: ${err.message}`, true);
           const errRow = el('div', 'msg system error',
@@ -1059,6 +1067,29 @@ async function renderExtensions(wrap) {
     wrap.innerHTML = '';
     wrap.appendChild(el('div', 'msg system error', `Extensions unavailable: ${err.message}`));
   }
+}
+
+// Keep the selection highlight in the open sheet in sync with the server state.
+function highlightSheetSelection() {
+  const buttons = document.querySelectorAll('#sheet-options .sheet-option');
+  for (const b of buttons) {
+    if (b.dataset.cfg === 'mode') {
+      b.classList.toggle('selected', b.dataset.value === state.modes?.currentModeId);
+    } else {
+      const cfg = (state.configOptions || []).find((c) => c.id === b.dataset.cfg);
+      b.classList.toggle('selected', !!cfg && b.dataset.value === cfg.currentValue);
+    }
+  }
+}
+
+// Transient confirmation inside the sheet so multi-step changes don't need
+// the popup to close (and chat stays clean).
+function sheetToast(text) {
+  const options = $('#sheet-options');
+  const prev = options.querySelector('.sheet-toast');
+  if (prev) prev.remove();
+  const t = el('div', 'msg system sheet-toast', text);
+  options.insertBefore(t, options.firstChild);
 }
 
 function closeSheet() {
