@@ -13,9 +13,19 @@
   --err: #e05c5c;
   --radius: 14px;
   --sat: env(safe-area-inset-top, 0px);
-  --sab: env(safe-area-inset-bottom, 0px);
+  --sab: 0px;
   --sal: env(safe-area-inset-left, 0px);
   --sar: env(safe-area-inset-right, 0px);
+}
+
+/* Reserve the home-indicator safe area only when there is no browser
+   chrome — i.e. in home-screen / standalone PWA mode. In a normal
+   Safari tab the URL bar and toolbar already cover that space, so
+   applying env() here would create a phantom gap at the bottom. */
+@media (display-mode: standalone) {
+  :root {
+    --sab: env(safe-area-inset-bottom, 0px);
+  }
 }
 
 * { box-sizing: border-box; }
