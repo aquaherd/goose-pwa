@@ -76,6 +76,10 @@ chmod 600 certs/server.key
 # --- CRL (825d, matches cert lifetime) ---
 openssl ca -gencrl -config "$CA_STATE/ca.cnf" -out certs/ca.crl -crldays 825
 
+# leaf + CA, for the TLS handshake chain
+cat certs/server.crt certs/ca.crt > certs/fullchain.pem
+chmod 600 certs/fullchain.pem
+
 echo "wrote certs/ca.{crt,key}, certs/server.{crt,key}, certs/ca.crl"
 echo "install certs/ca.crt on the iPhone (http://$host:8080/cert.crt) + full trust"
 echo "then: ./start.sh restart   (also (re)starts the OCSP responder)"

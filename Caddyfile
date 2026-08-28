@@ -107,6 +107,6 @@
 
 # HTTPS with the self-signed certificate
 https://{$TLS_SITE:omv.fritz.box} {
-        tls {$TLS_CERT:certs/server.crt} {$TLS_KEY:certs/server.key}
+        tls {$TLS_CHAIN:certs/fullchain.pem} {$TLS_KEY:certs/server.key}
         import app
 }
