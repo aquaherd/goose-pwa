@@ -418,6 +418,25 @@ function applySessionMeta(result) {
     renderModePill(result.modes.currentModeId);
   }
   if (result?.configOptions) state.configOptions = result.configOptions;
+  applySavedConfigOptions();
+}
+
+// Re-apply the user's last chosen thinking effort to every session.
+// goose resets new sessions to the server default (GOOSE_THINKING_EFFORT),
+// so a per-session pick otherwise looks like it never sticks.
+async function applySavedConfigOptions() {
+  const saved = store.get('thinkingEffort');
+  if (!saved || !state.sessionId) return;
+  const cfg = (state.configOptions || []).find((c) => c.id === 'thinking_effort');
+  if (!cfg || cfg.currentValue === saved) return;
+  try {
+    const r = await rpc('session/set_config_option', {
+      sessionId: state.sessionId,
+      configId: 'thinking_effort',
+      value: saved,
+    });
+    if (r?.configOptions) state.configOptions = r.configOptions;
+  } catch { /* non-fatal */ }
 }
 
 async function refreshSessionTitle() {
@@ -948,7 +967,6 @@ function openSheet() {
       btn.appendChild(el('span', null, opt.name || opt.value));
       if (opt.description) btn.appendChild(el('span', 'desc', opt.description));
       btn.addEventListener('click', async () => {
-        closeSheet();
         try {
           const r = await rpc('session/set_config_option', {
             sessionId: state.sessionId,
@@ -956,9 +974,14 @@ function openSheet() {
             value: opt.value,
           });
           if (r?.configOptions) state.configOptions = r.configOptions;
+          if (cfg.id === 'thinking_effort') store.set('thinkingEffort', opt.value);
           addSystemMessage(`${cfg.name || cfg.id}: ${opt.name || opt.value}`);
+          closeSheet();
         } catch (err) {
           addSystemMessage(`Set ${cfg.id} failed: ${err.message}`, true);
+          const errRow = el('div', 'msg system error',
+            `Set ${cfg.name || cfg.id} failed: ${err.message}`);
+          options.insertBefore(errRow, options.firstChild);
         }
       });
       options.appendChild(btn);

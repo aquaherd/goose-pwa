@@ -2,7 +2,7 @@
  * (WebSockets bypass service workers entirely; this guards the /acp preflight
  * GET and /status fetch). */
 
-const VERSION = 'goose-pwa-v6';
+const VERSION = 'goose-pwa-v7';
 const SHELL = [
   '/',
   '/index.html',
