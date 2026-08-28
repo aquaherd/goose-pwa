@@ -37,6 +37,19 @@ if [[ ! -f .env ]]; then
 fi
 set -a; source ./.env; set +a
 
+OCSP_PORT=2560
+
+ocsp_running() {
+  pgrep -u "$USER" -f "openssl ocsp -index certs/.ca/index.txt" >/dev/null 2>&1
+}
+
+start_ocsp() {
+  if ocsp_running; then echo "ocsp responder: already running on :$OCSP_PORT"; return; fi
+  setsid nohup openssl ocsp -index certs/.ca/index.txt -rsigner certs/ca.crt     -rkey certs/ca.key -CA certs/ca.crt -port $OCSP_PORT     -ndays 7 -ignore_err >>logs/ocsp.log 2>&1 < /dev/null &
+  for _ in $(seq 1 10); do ocsp_running && break; sleep 0.4; done
+  if ocsp_running; then echo "ocsp responder: up on :$OCSP_PORT"; else echo "ocsp responder: FAILED — see logs/ocsp.log" >&2; fi
+}
+
 goose_running() { curl -sf --max-time 2 "http://$GOOSE_HOST:$GOOSE_PORT/status" >/dev/null 2>&1; }
 caddy_ok()      { curl -sf --max-time 2 -o /dev/null "http://127.0.0.1:8080/" 2>/dev/null; }
 tls_ok()        { curl -skf --max-time 2 -o /dev/null "https://127.0.0.1/" 2>/dev/null; }
@@ -44,6 +57,7 @@ tls_ok()        { curl -skf --max-time 2 -o /dev/null "https://127.0.0.1/" 2>/de
 stop_all() {
   pkill -u "$USER" -f "^goose serve " 2>/dev/null && echo "stopped goose serve" || true
   pkill -u "$USER" -f "caddy run --config Caddyfile" 2>/dev/null && echo "stopped caddy" || true
+  pkill -u "$USER" -f "openssl ocsp" 2>/dev/null && echo "stopped ocsp responder" || true
   sleep 1
 }
 
@@ -83,6 +97,7 @@ start_caddy() {
 
 cmd_status() {
   if goose_running; then echo "goose serve: up (:$GOOSE_PORT)"; else echo "goose serve: DOWN"; fi
+  if ocsp_running; then echo "ocsp responder: up (:$OCSP_PORT)"; else echo "ocsp responder: DOWN"; fi
   if caddy_ok && tls_ok; then echo "caddy: up (:8080 + https :443)"
   elif caddy_ok || tls_ok; then echo "caddy: up (partial — check logs/caddy.log)"
   else echo "caddy: DOWN"; fi
@@ -92,9 +107,9 @@ cmd_status() {
 }
 
 case "${1:-start}" in
-  start)   start_goose; start_caddy ;;
+  start)   start_goose; start_ocsp; start_caddy ;;
   stop)    stop_all ;;
-  restart) stop_all; start_goose; start_caddy ;;
+  restart) stop_all; start_goose; start_ocsp; start_caddy ;;
   status)  cmd_status ;;
   *) echo "usage: $0 [start|stop|restart|status]" >&2; exit 2 ;;
 esac

@@ -60,13 +60,19 @@
                 file_server
         }
 
-        # CRL referenced by the server leaf so iOS gets a conclusive
-        # revocation answer instead of "inconclusive"
+        # CRL referenced by the server leaf
         @crl path /crl.pem
         handle @crl {
                 rewrite * /ca.crl
                 root * {$TLS_CERT_DIR:certs}
                 file_server
+        }
+
+        # OCSP responder (openssl ocsp on 127.0.0.1:2560) so iOS gets a
+        # *positive* revocation answer — CRL alone reads as inconclusive
+        @ocsp path /ocsp
+        handle @ocsp {
+                reverse_proxy 127.0.0.1:2560
         }
 
         # app shell
