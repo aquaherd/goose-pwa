@@ -50,9 +50,12 @@
                 reverse_proxy {$GOOSE_SERVE_ADDR:127.0.0.1:3284}
         }
 
-        # self-signed root certificate, for one-time iPhone trust bootstrap
-        handle /cert.crt {
-                rewrite * /server.crt
+        # local CA certificate for the one-time iPhone trust bootstrap.
+        # Install this (http(s)://<host>/cert.crt) and enable full trust;
+        # the server leaf chains to it, so iOS validates cleanly.
+        @ca path /cert.crt /ca.crt
+        handle @ca {
+                rewrite * /ca.crt
                 root * {$TLS_CERT_DIR:certs}
                 file_server
         }
