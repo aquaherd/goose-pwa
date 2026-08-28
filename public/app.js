@@ -895,14 +895,25 @@ async function loadSessionList() {
       del.addEventListener('click', async (e) => {
         e.stopPropagation();
         if (!confirm(`Delete "${s.title || s.sessionId}"?`)) return;
+        del.disabled = true;
+        del.textContent = '…';
         try {
           await rpc('session/delete', { sessionId: s.sessionId }, { timeoutMs: 20000 });
+          // drop the row immediately; refresh the list on its own so a slow or
+          // failed session/new can never leave a deleted entry in the drawer
+          item.remove();
+          loadSessionList().catch(() => {});
           if (s.sessionId === state.sessionId) {
             state.sessionId = null;
-            await newSession();
+            try {
+              await newSession();
+            } catch (err) {
+              addSystemMessage(`New session after delete failed: ${err.message}`, true);
+            }
           }
-          loadSessionList();
         } catch (err) {
+          del.disabled = false;
+          del.textContent = '✕';
           addSystemMessage(`Delete failed: ${err.message}`, true);
         }
       });
