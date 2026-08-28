@@ -22,6 +22,10 @@
         # keep this instance independent from any system-wide caddy
         admin {$ADMIN_ADDR:127.0.0.1:2018}
 
+        log {
+                output file logs/access.log
+        }
+
         # don't open a :80 listener for http->https redirects: our http site
         # lives on :8080 and port 80 belongs to the system web UI
         auto_https disable_redirects
