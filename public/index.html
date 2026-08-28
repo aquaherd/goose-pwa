@@ -3,6 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<script>
+    // Detect full-screen "added to Home Screen" mode. iOS legacy web clips
+    // (even over http) report navigator.standalone; installed HTTPS PWAs match
+    // display-mode: standalone. Only in these modes do we add safe-area
+    // padding — inside a Safari tab the browser chrome already covers it.
+    (function () {
+      var standalone = window.navigator.standalone === true ||
+        (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+      if (standalone) document.documentElement.classList.add('standalone');
+    })();
+  </script>
   <title>Goose</title>
   <meta name="description" content="A goose web client">
 

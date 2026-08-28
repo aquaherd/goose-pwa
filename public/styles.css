@@ -28,6 +28,13 @@
   }
 }
 
+/* iOS legacy home-screen web clips (added from an http URL) do not match
+   display-mode, but still run without Safari chrome; html.standalone is set
+   by index.html from navigator.standalone and is their reliable signal. */
+html.standalone {
+  --sab: env(safe-area-inset-bottom, 0px);
+}
+
 * { box-sizing: border-box; }
 
 [hidden] { display: none !important; }
