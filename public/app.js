@@ -1218,9 +1218,19 @@ function init() {
     state.pinned = c.scrollHeight - c.scrollTop - c.clientHeight < 80;
   });
 
-  // keep the latest message visible when the iOS keyboard opens
+  // Bind the app height to the true visible viewport height. On iPhones in a
+  // normal Safari tab the bottom toolbar (back / share / tab buttons) expands
+  // and collapses; visualViewport tracks it exactly, so we stay clear of the
+  // toolbar and keyboard when they appear, and reclaim the space the moment
+  // the toolbar hides instead of leaving a dead strip.
   if (window.visualViewport) {
-    window.visualViewport.addEventListener('resize', () => maybeScroll());
+    const syncAppHeight = () => {
+      const app = document.getElementById('app');
+      if (app) app.style.height = window.visualViewport.height + 'px';
+    };
+    window.visualViewport.addEventListener('resize', () => { syncAppHeight(); maybeScroll(); });
+    window.visualViewport.addEventListener('scroll', syncAppHeight);
+    syncAppHeight();
   }
 
   if ('serviceWorker' in navigator) {
