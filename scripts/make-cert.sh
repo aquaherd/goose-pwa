@@ -59,8 +59,8 @@ extendedKeyUsage=serverAuth
 keyUsage=critical,digitalSignature,keyEncipherment
 subjectKeyIdentifier=hash
 authorityKeyIdentifier=keyid:always
-crlDistributionPoints=URI:http://$host:8080/crl.pem
-authorityInfoAccess=OCSP;URI:http://$host:8080/ocsp
+crlDistributionPoints=URI:https://$host/crl.pem
+authorityInfoAccess=OCSP;URI:https://$host/ocsp
 EXT
 
 # --- server key + leaf (registered in the CA index so OCSP works) ---
