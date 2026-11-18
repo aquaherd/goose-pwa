@@ -168,7 +168,7 @@ goose serve (environment, see `deploy/pihole/goose.env` / `.env`):
 
 | Key   | Meaning                                   |
 | ----- | ----------------------------------------- |
-| `cwd` | Default working directory for new sessions; omitted means the server's working directory |
+| `cwd` | Absolute working directory for new sessions (goose rejects a relative one); the installer writes the deployment path, and the app refuses to open a session without it |
 
 Caddy:
 

@@ -147,7 +147,7 @@ const state = {
   token: store.get('token'), // the goose serve secret key (GOOSE_SERVER__SECRET_KEY)
   sessionId: store.get('sessionId'),
   sessionTitle: store.get('sessionTitle', 'Goose'),
-  defaultCwd: '.',
+  defaultCwd: null,
   agentInfo: null,
   modes: null,
   configOptions: null,
@@ -362,6 +362,13 @@ function setConnState(s) {
 /* session lifecycle                                                   */
 /* ------------------------------------------------------------------ */
 
+// goose requires an absolute cwd for session/new and session/load; it has no
+// server-side default, so a deployment without one cannot open a session.
+function sessionCwd() {
+  if (state.defaultCwd) return state.defaultCwd;
+  throw new Error('No absolute "cwd" configured — set it in /config.json and reload');
+}
+
 async function ensureSession() {
   try {
     if (state.sessionId) {
@@ -379,7 +386,7 @@ async function ensureSession() {
 async function newSession() {
   closeStream();
   clearChat();
-  const result = await rpc('session/new', { cwd: state.defaultCwd, mcpServers: [] });
+  const result = await rpc('session/new', { cwd: sessionCwd(), mcpServers: [] });
   state.sessionId = result.sessionId;
   state.sessionTitle = 'New chat';
   applySessionMeta(result);
@@ -403,7 +410,7 @@ async function loadSession(sessionId) {
   store.set('sessionId', sessionId);
 
   try {
-    const result = await rpc('session/load', { sessionId, cwd: state.defaultCwd, mcpServers: [] });
+    const result = await rpc('session/load', { sessionId, cwd: sessionCwd(), mcpServers: [] });
     state.sessionId = result.sessionId ?? sessionId;
     applySessionMeta(result);
     store.set('sessionId', state.sessionId);
@@ -1180,7 +1187,10 @@ function init() {
   // deployment config (default cwd for new sessions)
   fetch('/config.json')
     .then((r) => (r.ok ? r.json() : {}))
-    .then((c) => { if (c.cwd) state.defaultCwd = c.cwd; })
+    .then((c) => {
+      // goose rejects a relative cwd (-32602), so only accept an absolute one
+      if (typeof c.cwd === 'string' && c.cwd.startsWith('/')) state.defaultCwd = c.cwd;
+    })
     .catch(() => {})
     .finally(connect);
 

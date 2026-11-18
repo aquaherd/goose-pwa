@@ -38,7 +38,11 @@ step() { printf '\n== %s\n' "$*"; }
 
 step "static app -> $PREFIX"
 install -d -m 0755 "$PREFIX"
-rsync -a --delete --exclude '.git*' "$REPO/public/" "$PREFIX/"
+rsync -a --delete --exclude '.git*' --exclude 'config.json' "$REPO/public/" "$PREFIX/"
+# the working directory for new sessions: goose requires an absolute path and
+# has no server-side default, so it is written per deployment
+printf '{"cwd": "%s"}\n' "$GOOSE_HOME/workspace" >"$PREFIX/config.json"
+chmod 0644 "$PREFIX/config.json"
 
 step "service user $GOOSE_USER"
 if ! id -u "$GOOSE_USER" >/dev/null 2>&1; then
