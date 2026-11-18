@@ -29,6 +29,11 @@ const store = {
       localStorage.setItem('goose-pwa:' + k, JSON.stringify(v));
     } catch { /* private mode etc. */ }
   },
+  del(k) {
+    try {
+      localStorage.removeItem('goose-pwa:' + k);
+    } catch { /* private mode etc. */ }
+  },
 };
 
 const clientId = store.get('clientId') ?? (() => {
@@ -1209,6 +1214,11 @@ function init() {
   $('#btn-new').addEventListener('click', () => newSession().catch((e) => addSystemMessage(e.message, true)));
   $('#btn-sessions').addEventListener('click', openDrawer);
   $('#btn-close-drawer').addEventListener('click', closeDrawer);
+  $('#btn-signout').addEventListener('click', () => {
+    // forget the secret and start over: the welcome screen asks for it again
+    store.del('token');
+    location.reload();
+  });
   $('#drawer-backdrop').addEventListener('click', closeDrawer);
   $('#mode-pill').addEventListener('click', openSheet);
   $('#sheet-backdrop').addEventListener('click', closeSheet);

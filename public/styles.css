@@ -534,6 +534,21 @@ html, body {
 
 .session-list { flex: 1; overflow-y: auto; padding: 4px 8px; }
 
+.drawer-foot {
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+}
+.drawer-foot button {
+  width: 100%;
+  padding: 11px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-input);
+  color: var(--text-dim);
+  font: inherit;
+}
+.drawer-foot button:active { background: var(--bg); color: var(--text); }
+
 .session-item {
   display: flex;
   align-items: center;

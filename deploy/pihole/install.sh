@@ -120,6 +120,38 @@ PY
 	pihole reloaddns
 fi
 
+step "Caddy log redaction"
+if grep -q "goose-pwa: redact" "$CADDY_MAIN"; then
+	echo "already present"
+else
+	cp -a "$CADDY_MAIN" "$CADDY_MAIN.bak-$(date +%Y%m%d%H%M%S)"
+	python3 - "$CADDY_MAIN" <<'PY'
+import re, sys
+
+path = sys.argv[1]
+src = open(path).read()
+block = (
+    "\t# goose-pwa: redact the WebSocket secret from error logs. Caddy logs\n"
+    "\t# the request URI on proxy errors, and the ACP token travels as ?token=.\n"
+    "\tlog {\n"
+    "\t\tformat filter {\n"
+    "\t\t\twrap json\n"
+    "\t\t\tfields {\n"
+    "\t\t\t\trequest>uri query {\n"
+    "\t\t\t\t\tdelete token\n"
+    "\t\t\t\t}\n"
+    "\t\t\t}\n"
+    "\t\t}\n"
+    "\t}\n"
+)
+m = re.search(r"(?ms)^\{[ \t]*\n(.*?)^\}", src)
+if not m:
+    sys.exit("error: global options block not found in " + path)
+open(path, "w").write(src[: m.end(1)] + block + src[m.end(1):])
+print("added token redaction to the global options block")
+PY
+fi
+
 step "Caddy site block"
 install -m 0644 "$REPO/deploy/pihole/goose.caddy" "$CADDY_SNIPPET"
 if grep -qx "import $CADDY_SNIPPET" "$CADDY_MAIN"; then

@@ -44,7 +44,7 @@ cd goose-pwa
 sudo ./deploy/pihole/install.sh
 ```
 
-The installer is idempotent and does five things:
+The installer is idempotent and does six things:
 
 1. copies `public/` to `/srv/goose-pwa`;
 2. installs goose `1.55.0` (`GOOSE_VERSION=…` overrides) to
@@ -55,7 +55,10 @@ The installer is idempotent and does five things:
    reloads DNS;
 5. installs `/etc/caddy/goose.caddy` and appends
    `import /etc/caddy/goose.caddy` to the main Caddyfile, validates it and
-   reloads Caddy.
+   reloads Caddy;
+6. adds a log filter to the Caddyfile's global options so `?token=…` is
+   stripped from error-log entries (Caddy logs the request URI when the ACP
+   upstream fails, and the token travels as a query parameter).
 
 Caddy answers the ACME HTTP-01 challenge on `:80` and requests the
 certificate for `goose.pihole.fritz.box` from
@@ -86,10 +89,16 @@ or configure it interactively as the service user:
 1. Open `http://pihole.fritz.box/` in Safari, install HomeCA's root profile,
    then enable it under *Settings → General → About → Certificate Trust
    Settings* (once per device).
-2. Open `https://goose.pihole.fritz.box`, enter the secret key from
-   `/etc/goose-pwa/goose.env` (it is stored in localStorage and sent as
-   `?token=` on the WebSocket — the only browser-compatible auth channel).
-3. Share → **Add to Home Screen**. A trusted https origin is what gives a real
+2. Open `https://goose.pihole.fritz.box`. The welcome screen asks for the
+   secret key; paste the value of `GOOSE_SERVER__SECRET_KEY` from
+   `/etc/goose-pwa/goose.env` (pasting the whole `KEY=value` line also works)
+   and tap **Connect**. It is kept in localStorage and reused on every visit,
+   and sent as `?token=` on the WebSocket — the only browser-compatible auth
+   channel. A wrong key brings the form back with
+   *"Secret key rejected (goose answered HTTP 401)"*.
+3. To change or forget the key later: open the session drawer and tap
+   **Change secret key**. That clears it and reloads to the welcome screen.
+4. Share → **Add to Home Screen**. A trusted https origin is what gives a real
    full-screen PWA (service worker + `display-mode: standalone`).
 
 Over plain HTTP the app still works, just without offline caching.
