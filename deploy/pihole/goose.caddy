@@ -1,0 +1,69 @@
+# goose-pwa on the Pi-hole — Caddy site block.
+#
+# Imported from the main Caddyfile (HomeCA owns that file):
+#
+#     import /etc/caddy/goose.caddy
+#
+# TLS comes from HomeCA's step-ca ACME provisioner; this repo ships no
+# certificates, no local CA and no OCSP responder. Step-ca must be reachable
+# at pihole.fritz.box:8443 and its root installed at /etc/caddy/homeca-root.crt
+# (both are HomeCA's job).
+#
+# Replace the hostname, the ACME endpoint and the static root if you deploy
+# elsewhere. HTTP-01 is used because Caddy itself owns :443.
+
+# Typed or bookmarked without a scheme: send it to the TLS site. The trust
+# site on pihole.fritz.box is unaffected.
+http://goose.pihole.fritz.box {
+	redir https://goose.pihole.fritz.box{uri} 308
+}
+
+https://goose.pihole.fritz.box {
+	tls {
+		issuer acme {
+			dir https://pihole.fritz.box:8443/acme/acme/directory
+			trusted_roots /etc/caddy/homeca-root.crt
+			disable_tlsalpn_challenge
+		}
+	}
+
+	root * /srv/goose-pwa
+	encode zstd gzip
+
+	# Auth preflight: goose 404s non-upgrade GETs that carry an Origin header,
+	# so strip it. Caddy orders handle blocks by path length, so this wins.
+	handle /acp-preflight {
+		rewrite * /acp
+		reverse_proxy 127.0.0.1:3284 {
+			header_up -Origin
+		}
+	}
+
+	# ACP over WebSocket, straight to goose serve on this host.
+	handle /acp* {
+		reverse_proxy 127.0.0.1:3284
+	}
+
+	# goose health endpoint
+	handle /status {
+		reverse_proxy 127.0.0.1:3284
+	}
+
+	handle {
+		file_server
+	}
+
+	# always fetch fresh app code / manifest
+	header /sw.js Cache-Control "no-cache"
+	header /app.js Cache-Control "no-cache"
+	header /styles.css Cache-Control "no-cache"
+	header /config.json Cache-Control "no-cache"
+	header /manifest.webmanifest Cache-Control "no-cache"
+	header /manifest.webmanifest Content-Type "application/manifest+json"
+	header /icons/* Cache-Control "public, max-age=604800"
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+	}
+}

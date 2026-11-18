@@ -1,112 +1,69 @@
-# goose-pwa — static PWA + WebSocket reverse proxy to `goose serve`.
+# goose-pwa — standalone config for local development.
 #
-# Run from the project root:
 #   caddy run --config Caddyfile
 #
-# Overridable via environment (adapt-time substitution):
-#   SITE_ADDRESS      http  listen address       (default ":8080")
+# Plain HTTP on :8080, no TLS: this is the "just look at it on the LAN" mode.
+# Production runs on the Pi-hole behind HomeCA's ACME (see deploy/pihole/).
+# This repo never generates, stores or serves certificates.
+#
+# Environment (adapt-time):
+#   SITE_ADDRESS      listen address             (default ":8080")
 #   SITE_ROOT         static files directory     (default "./public")
 #   GOOSE_SERVE_ADDR  goose serve upstream       (default "127.0.0.1:3284")
-#   TLS_SITE          https hostname             (default "omv.fritz.box")
-#   TLS_CERT / TLS_KEY  self-signed cert paths   (default certs/server.crt|key)
-#   TLS_CERT_DIR      dir served at /cert.crt    (default certs)
-#
-# HTTPS (self-signed): the site below serves https://<TLS_SITE> on :443 with
-# certs/server.{crt,key} (generate: see scripts/make-cert.sh or README).
-# On the iPhone, install certs/server.crt first (http://<host>:8080/cert.crt),
-# then enable full trust in Settings > General > About > Certificate Trust
-# Settings. A trusted https origin gives a real PWA install (service worker +
-# display-mode: standalone), which reclaims the bottom strip.
-
 {
-        # keep this instance independent from any system-wide caddy
-        admin {$ADMIN_ADDR:127.0.0.1:2018}
+	# keep this instance independent from any system-wide caddy
+	admin {$ADMIN_ADDR:127.0.0.1:2018}
 
-        log {
-                output file logs/access.log
-        }
-
-        # don't open a :80 listener for http->https redirects: our http site
-        # lives on :8080 and port 80 belongs to the system web UI
-        auto_https disable_redirects
+	log {
+		output file logs/access.log
+	}
 }
 
 (app) {
-        root * {$SITE_ROOT:./public}
-        encode zstd gzip
+	root * {$SITE_ROOT:./public}
+	encode zstd gzip
 
-        # ACP over WebSocket, straight to goose serve.
-        handle /acp* {
-                reverse_proxy {$GOOSE_SERVE_ADDR:127.0.0.1:3284}
-        }
+	# Auth preflight for the UI: goose 404s any non-upgrade GET that carries
+	# an Origin header, so strip it for a reliable 406/404. Caddy orders
+	# handle blocks by path length, so this wins over /acp*.
+	handle /acp-preflight {
+		rewrite * /acp
+		reverse_proxy {$GOOSE_SERVE_ADDR:127.0.0.1:3284} {
+			header_up -Origin
+		}
+	}
 
-        # Auth preflight for the UI: goose 404s any non-upgrade GET that carries
-        # an Origin header, so strip it for a reliable 406/404.
-        handle /acp-preflight {
-                rewrite * /acp
-                reverse_proxy {$GOOSE_SERVE_ADDR:127.0.0.1:3284} {
-                        header_up -Origin
-                }
-        }
+	# ACP over WebSocket, straight to goose serve.
+	handle /acp* {
+		reverse_proxy {$GOOSE_SERVE_ADDR:127.0.0.1:3284}
+	}
 
-        # goose health endpoint
-        handle /status {
-                reverse_proxy {$GOOSE_SERVE_ADDR:127.0.0.1:3284}
-        }
+	# goose health endpoint
+	handle /status {
+		reverse_proxy {$GOOSE_SERVE_ADDR:127.0.0.1:3284}
+	}
 
-        # local CA certificate for the one-time iPhone trust bootstrap.
-        # Install this (http(s)://<host>/cert.crt) and enable full trust;
-        # the server leaf chains to it, so iOS validates cleanly.
-        @ca path /cert.crt /ca.crt
-        handle @ca {
-                rewrite * /ca.crt
-                root * {$TLS_CERT_DIR:certs}
-                file_server
-        }
+	# app shell
+	handle {
+		file_server
+	}
 
-        # CRL referenced by the server leaf
-        @crl path /crl.pem
-        handle @crl {
-                rewrite * /ca.crl
-                root * {$TLS_CERT_DIR:certs}
-                file_server
-        }
+	# always fetch fresh app code / manifest
+	header /sw.js Cache-Control "no-cache"
+	header /app.js Cache-Control "no-cache"
+	header /styles.css Cache-Control "no-cache"
+	header /config.json Cache-Control "no-cache"
+	header /manifest.webmanifest Cache-Control "no-cache"
+	header /manifest.webmanifest Content-Type "application/manifest+json"
+	header /icons/* Cache-Control "public, max-age=604800"
 
-        # OCSP responder (openssl ocsp on 127.0.0.1:2560) so iOS gets a
-        # *positive* revocation answer — CRL alone reads as inconclusive
-        @ocsp path /ocsp
-        handle @ocsp {
-                reverse_proxy 127.0.0.1:2560
-        }
-
-        # app shell
-        handle {
-                file_server
-        }
-
-        # always fetch fresh app code / manifest
-        header /sw.js Cache-Control "no-cache"
-        header /app.js Cache-Control "no-cache"
-        header /styles.css Cache-Control "no-cache"
-        header /config.json Cache-Control "no-cache"
-        header /manifest.webmanifest Cache-Control "no-cache"
-        header /manifest.webmanifest Content-Type "application/manifest+json"
-        header /icons/* Cache-Control "public, max-age=604800"
-
-        # security headers
-        header {
-                X-Content-Type-Options nosniff
-                Referrer-Policy no-referrer
-        }
+	# security headers
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+	}
 }
 
-# plain HTTP on the LAN (also the /cert.crt bootstrap endpoint)
 {$SITE_ADDRESS::8080} {
-        import app
-}
-
-# HTTPS with the self-signed certificate
-https://{$TLS_SITE:omv.fritz.box} {
-        tls {$TLS_CHAIN:certs/fullchain.pem} {$TLS_KEY:certs/server.key}
-        import app
+	import app
 }

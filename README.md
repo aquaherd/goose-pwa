@@ -5,102 +5,125 @@ talking **ACP (Agent Client Protocol)** over WebSocket to `goose serve`,
 served by **Caddy**. No build step, no Node, no dependencies — static files
 plus two processes.
 
+TLS is not this project's business: Caddy obtains a certificate from an
+existing ACME CA (HomeCA on the Pi-hole) and renews it. The repo ships no
+local CA, no self-signed certificate and no OCSP responder.
+
 ## Architecture
 
 ```
  iPhone (Safari / Home-Screen PWA)
-    │  HTTPS: static files + WebSocket
+    │  HTTPS (cert from HomeCA's step-ca) + WebSocket
     ▼
- Caddy ──── static: public/
-    │        /acp, /status → 127.0.0.1:3284
+ Caddy (pihole) ──── static: /srv/goose-pwa
+    │                 /acp, /status → 127.0.0.1:3284
     ▼
  goose serve        (ACP over HTTP/WebSocket, secret-key auth)
 ```
 
 The browser speaks ACP (JSON-RPC 2.0) directly to goose's WebSocket endpoint
 (`/acp`). Caddy only serves the app shell and reverse-proxies the socket.
-There is no bridge process.
+There is no bridge process, and no certificate handling in this repo.
 
-## Quick start
+## Production: Pi-hole behind HomeCA
+
+Everything needed is in `deploy/pihole/`. Assumptions (handled by the sibling
+HomeCA project — step-ca on the Pi-hole — not by this repo):
+
+- Caddy runs as a system service with `/etc/caddy/Caddyfile`.
+- step-ca listens on `pihole.fritz.box:8443` with an ACME provisioner and its
+  public endpoints behind `https://pihole.fritz.box`.
+- HomeCA's root is installed at `/etc/caddy/homeca-root.crt`; devices that use
+  the app trust it.
+
+Deploy on the Pi-hole:
 
 ```sh
-./start.sh          # starts goose serve + caddy (idempotent)
-./start.sh status   # shows state and the secret key
-./start.sh restart  # full restart
-./start.sh stop     # stop both
+git clone https://github.com/aquaherd/goose-pwa
+cd goose-pwa
+sudo ./deploy/pihole/install.sh
 ```
 
-The script generates `.env` with a `GOOSE_SERVER__SECRET_KEY` on first run,
-starts `goose serve` on 127.0.0.1:3284 (with `--allowed-origin` for the
-origins listed at the top of the script — edit them there), and runs caddy
-on :8080. Logs go to `./logs/`.
+The installer is idempotent and does five things:
 
-Open `http://<host>:8080` and enter the secret key when prompted
-(it is stored in localStorage and sent as `?token=` on the WebSocket —
-the only browser-compatible auth channel).
+1. copies `public/` to `/srv/goose-pwa`;
+2. installs goose `1.55.0` (`GOOSE_VERSION=…` overrides) to
+   `/usr/local/bin/goose` and enables the `goose-serve` systemd unit;
+3. writes `/etc/goose-pwa/goose.env` with a fresh `GOOSE_SERVER__SECRET_KEY`
+   (only if the file does not exist yet);
+4. adds `192.168.188.3 goose.pihole.fritz.box` to Pi-hole's `dns.hosts` and
+   reloads DNS;
+5. installs `/etc/caddy/goose.caddy` and appends
+   `import /etc/caddy/goose.caddy` to the main Caddyfile, validates it and
+   reloads Caddy.
 
-## HTTPS (self-signed) — real PWA install on iPhone
+Caddy answers the ACME HTTP-01 challenge on `:80` and requests the
+certificate for `goose.pihole.fritz.box` from
+`https://pihole.fritz.box:8443/acme/acme/directory`. Nothing needs to be
+copied to the iPhone except HomeCA's root (see below).
 
-Plain http works for browsing, but iOS only installs a full PWA (service
-worker + `display-mode: standalone`, no Safari bottom bar) from a
-**trusted https** origin. The repo includes a self-signed setup:
+Re-run `sudo ./deploy/pihole/install.sh` after a `git pull` to refresh the app
+and the unit.
 
-1. Generate the certificate once (see `scripts/make-cert.sh`):
-   ```sh
-   openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 825 \
-     -keyout certs/server.key -out certs/server.crt \
-     -subj "/CN=omv.fritz.box" \
-     -addext "subjectAltName=DNS:omv.fritz.box,DNS:localhost,IP:127.0.0.1"
-   ```
-2. Allow caddy to bind :443 as your user (one-time):
-   ```sh
-   sudo setcap cap_net_bind_service=+ep "$(command -v caddy)"
-   ```
-   Then `./start.sh restart` — caddy serves both `http://<host>:8080`
-   and `https://omv.fritz.box`.
-3. Trust the cert on the iPhone (once):
-   - open `http://omv.fritz.box:8080/cert.crt` in Safari,
-   - install the profile, then enable full trust in
-     **Settings → General → About → Certificate Trust Settings**.
-4. Open `https://omv.fritz.box`, enter the secret key, then
-   **Add to Home Screen** — a proper full-screen PWA install.
+### Model provider on the Pi
 
-The http `:8080` listener stays available as fallback and for the
-certificate bootstrap download.
+`goose.env` is created with the secret key only. Either uncomment and fill in
+the provider block there:
 
-### Accessing from other machines (iPhone on the LAN)
+```sh
+sudo nano /etc/goose-pwa/goose.env
+# GOOSE_PROVIDER=opencode_go
+# GOOSE_MODEL=deepseek-v4.1-flash
+# OPENCODE_API_KEY=...
+sudo systemctl restart goose-serve
+```
 
-goose serve rejects WebSocket upgrades whose `Origin` is not loopback.
-Two options:
-
-1. **Allow the origin explicitly** (recommended):
-
-   ```sh
-   goose serve --host 127.0.0.1 --port 3284 \
-     --allowed-origin http://192.168.1.50:8080 \
-     --allowed-origin https://goose.home.arpa
-   ```
-
-   Note: setting `--allowed-origin` *replaces* the default loopback
-   origins — list every origin you use.
-
-2. Or neutralize the origin check at the proxy by uncommenting
-   `header_up Origin "http://127.0.0.1"` in the `handle /acp*` block of the
-   Caddyfile. The secret key remains the real authentication.
-
-The client detects a rejected origin and tells you what to do.
+or configure it interactively as the service user:
+`sudo -iu goose goose configure`.
 
 ### Install on iPhone (Add to Home Screen)
 
-1. Serve over HTTPS (service workers require a secure context):
-   - real domain: `SITE_ADDRESS="goose.example.com" caddy run --config Caddyfile`, or
-   - LAN name with Caddy's internal CA: `SITE_ADDRESS="https://goose.home.arpa"`
-     plus a `tls internal` line in the Caddyfile, then install Caddy's root
-     certificate on the iPhone and enable it under
-     *Settings → General → About → Certificate Trust Settings*.
-2. Open the site in Safari → Share → **Add to Home Screen**.
+1. Open `http://pihole.fritz.box/` in Safari, install HomeCA's root profile,
+   then enable it under *Settings → General → About → Certificate Trust
+   Settings* (once per device).
+2. Open `https://goose.pihole.fritz.box`, enter the secret key from
+   `/etc/goose-pwa/goose.env` (it is stored in localStorage and sent as
+   `?token=` on the WebSocket — the only browser-compatible auth channel).
+3. Share → **Add to Home Screen**. A trusted https origin is what gives a real
+   full-screen PWA (service worker + `display-mode: standalone`).
 
 Over plain HTTP the app still works, just without offline caching.
+
+## Local development
+
+```sh
+./start.sh          # goose serve + caddy on :8080, plain HTTP
+./start.sh status   # shows state and the secret key
+./start.sh restart
+./start.sh stop
+```
+
+The script generates `.env` with a `GOOSE_SERVER__SECRET_KEY` on first run,
+starts `goose serve` on `127.0.0.1:3284` with loopback origins, and runs caddy
+on `:8080`. Logs go to `./logs/`. No certificates are involved; use the
+Pi-hole deployment when you need https and a PWA install.
+
+Open `http://127.0.0.1:8080` and enter the secret key when prompted.
+
+## Accessing from other machines
+
+goose serve rejects WebSocket upgrades whose `Origin` is not loopback. Add the
+origin explicitly (this *replaces* the loopback defaults):
+
+```sh
+goose serve --host 127.0.0.1 --port 3284 \
+  --allowed-origin https://goose.pihole.fritz.box \
+  --allowed-origin http://192.168.1.50:8080
+```
+
+The client detects a rejected origin and tells you what to do. In the Pi-hole
+deployment the unit passes `--allowed-origin https://goose.pihole.fritz.box`
+already.
 
 ## Features
 
@@ -122,32 +145,37 @@ Over plain HTTP the app still works, just without offline caching.
 
 ## Configuration
 
-goose serve:
+goose serve (environment, see `deploy/pihole/goose.env` / `.env`):
 
 | Setting                     | Meaning                                             |
 | --------------------------- | --------------------------------------------------- |
 | `GOOSE_SERVER__SECRET_KEY`  | Shared secret; required (or `--dangerously-unauthenticated`) |
+| `GOOSE_PROVIDER` / `GOOSE_MODEL` | Model provider for the deployed agent          |
+| `GOOSE_THINKING_EFFORT`     | Default thinking effort for new sessions            |
 | `--host` / `--port`         | Bind address; keep loopback behind Caddy            |
-| `--allowed-origin`         | Exact origins allowed to connect (replaces loopback defaults) |
-| `--tls`                     | Not needed behind Caddy (Caddy terminates TLS)      |
+| `--allowed-origin`          | Exact origins allowed to connect (replaces loopback defaults) |
 
-`public/config.json`:
+`public/config.json` (optional, served as-is):
 
-| Key   | Meaning                              |
-| ----- | ------------------------------------ |
-| `cwd` | Default working directory for new sessions |
+| Key   | Meaning                                   |
+| ----- | ----------------------------------------- |
+| `cwd` | Default working directory for new sessions; omitted means the server's working directory |
 
-Caddy (adapt-time env):
+Caddy:
 
-| Variable            | Default              | Meaning               |
-| ------------------- | -------------------- | --------------------- |
-| `SITE_ADDRESS`      | `:8080`              | Caddy site address    |
-| `SITE_ROOT`         | `./public`           | Static files root     |
-| `GOOSE_SERVE_ADDR`  | `127.0.0.1:3284`     | goose serve upstream  |
+| File | Meaning |
+| ---- | ------- |
+| `Caddyfile` | standalone local-dev config (`:8080`, no TLS) |
+| `deploy/pihole/goose.caddy` | production site block imported by the Pi-hole's main Caddyfile |
+
+`goose.caddy` contains the static root (`/srv/goose-pwa`), the ACME issuer
+endpoint and the upstream (`127.0.0.1:3284`). Edit it if goose serve runs on a
+different host — but then the ACP traffic leaves the machine unencrypted, so
+prefer keeping them together.
 
 > **Security:** anyone with the secret key can drive your goose agent (which
-> runs shell commands as you). Treat the key like a password and prefer HTTPS
-> so it isn't sent in cleartext URLs.
+> runs shell commands as the service user). Treat the key like a password and
+> keep the app on HTTPS.
 
 ## Known limitations
 
@@ -157,23 +185,10 @@ Caddy (adapt-time env):
   `acp-connection-id`s but offers no browser-usable resumption.)
 - A permission prompt that is pending exactly when the socket dies is
   stranded; cancel/retry the turn after reconnecting.
+- The settings sheet uses `_goose/unstable/...` extension methods, which can
+  change between goose releases. The installer pins the goose version this
+  client was tested against.
 
-## systemd (optional)
+## License
 
-```ini
-# ~/.config/systemd/user/goose-serve.service
-[Unit]
-Description=goose ACP server
-After=network.target
-
-[Service]
-Environment=GOOSE_SERVER__SECRET_KEY=change-me
-ExecStart=/usr/local/bin/goose serve --host 127.0.0.1 --port 3284
-Restart=on-failure
-
-[Install]
-WantedBy=default.target
-```
-
-Caddy can run the same way with
-`ExecStart=/usr/bin/caddy run --config /path/to/Caddyfile`.
+MIT — see [LICENSE](LICENSE).

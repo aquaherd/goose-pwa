@@ -1,0 +1,25 @@
+[Unit]
+Description=goose ACP server for goose-pwa
+Documentation=https://github.com/aquaherd/goose-pwa
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=goose
+Group=goose
+Environment=HOME=/home/goose
+EnvironmentFile=/etc/goose-pwa/goose.env
+WorkingDirectory=/home/goose/workspace
+ExecStart=/usr/local/bin/goose serve --host 127.0.0.1 --port 3284 --allowed-origin https://goose.pihole.fritz.box
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/goose
+
+[Install]
+WantedBy=multi-user.target

@@ -17,6 +17,3 @@ Thumbs.db
 
 # runtime logs
 logs/
-
-# TLS private keys / certificates
-certs/
