@@ -162,6 +162,10 @@ const state = {
   pinned: true,
   lastActivity: 0,  // last message from the server, for the liveness probe
   probing: false,
+  probe: 'idle',    // liveness probe: idle | checking | alive | dead
+  lastProbeAt: 0,
+  turnStartedAt: 0,
+  replaying: false, // true while session/load replays history
   stalled: false,
 };
 
@@ -326,6 +330,7 @@ async function connect() {
 
   ws.onmessage = (e) => {
     state.lastActivity = Date.now();
+    state.probe = 'idle';
     let msg;
     try {
       msg = JSON.parse(e.data);
@@ -392,11 +397,15 @@ async function probeConnection() {
     return;
   }
   state.probing = true;
+  state.probe = 'checking';
   state.lastActivity = Date.now(); // one probe per quiet period
   try {
     await rpc('session/list', {}, { timeoutMs: 8000 });
+    state.probe = 'alive';
+    state.lastProbeAt = Date.now();
   } catch {
     if (state.ws !== ws) return;
+    state.probe = 'dead';
     state.stalled = true;
     addSystemMessage('Connection stalled — reconnecting…', true);
     connect();
@@ -483,6 +492,7 @@ async function loadSession(sessionId) {
   state.sessionId = sessionId;
   store.set('sessionId', sessionId);
 
+  state.replaying = true;
   try {
     const result = await rpc('session/load', { sessionId, cwd: sessionCwd(), mcpServers: [] });
     state.sessionId = result.sessionId ?? sessionId;
@@ -493,6 +503,7 @@ async function loadSession(sessionId) {
     store.set('sessionId', previousSessionId);
     throw err;
   } finally {
+    state.replaying = false;
     loadingEl.remove();
   }
   closeStream();
@@ -737,6 +748,9 @@ function upsertToolCall(u) {
     head.appendChild(el('span', 'tool-status'));
     const title = el('span', 'tool-title', shortTitle(u.title));
     head.appendChild(title);
+    const elapsedEl = el('span', 'tool-elapsed');
+    elapsedEl.hidden = true;
+    head.appendChild(elapsedEl);
     const chev = el('span', 'tool-chevron', '›');
     head.appendChild(chev);
     const body = el('div', 'tool-body');
@@ -744,14 +758,59 @@ function upsertToolCall(u) {
     card.appendChild(body);
     head.addEventListener('click', () => card.classList.toggle('open'));
     chat().appendChild(card);
-    t = { card, body, title, contentEl: null };
+    // a fresh tool_call often carries no status; ACP's default is pending.
+    // During replay, a call with no completing update stays unfinished.
+    const replayed = state.replaying;
+    const settled = u.status === 'completed' || u.status === 'failed';
+    const started = !replayed && !settled;
+    t = {
+      card, body, title, contentEl: null,
+      startedAt: started ? Date.now() : 0,
+      endedAt: 0,
+      running: started,
+      stale: replayed && !settled,
+      elapsedEl,
+    };
     state.tools.set(id, t);
     if (u.rawInput !== undefined) {
       t.body.appendChild(el('pre', null, formatRaw(u.rawInput)));
     }
   }
   if (u.title) t.title.textContent = shortTitle(u.title);
-  if (u.status) t.card.dataset.status = u.status;
+  if (u.status) {
+    const running = u.status === 'in_progress' || u.status === 'pending';
+    if (running && state.replaying) {
+      // replayed mid-turn state: the connection that owned this turn is gone,
+      // so label it unfinished instead of pretending it is running
+      t.stale = true;
+      t.running = false;
+      t.card.dataset.status = 'stale';
+    } else {
+      t.stale = false;
+      t.card.dataset.status = u.status;
+      if (running) {
+        if (!t.startedAt) t.startedAt = Date.now();
+        t.running = true;
+      } else {
+        t.running = false;
+        if (t.startedAt && !t.endedAt) t.endedAt = Date.now();
+      }
+    }
+  }
+  if (t.stale) {
+    t.elapsedEl.hidden = false;
+    t.elapsedEl.textContent = 'unfinished';
+    t.elapsedEl.classList.remove('warn');
+    if (t.card.dataset.status !== 'stale') t.card.dataset.status = 'stale';
+  } else if (t.startedAt) {
+    const ms = (t.endedAt ?? Date.now()) - t.startedAt;
+    t.elapsedEl.hidden = false;
+    t.elapsedEl.textContent = fmtDur(ms);
+    t.elapsedEl.classList.toggle('warn', ms >= 5 * 60 * 1000);
+  } else {
+    t.elapsedEl.hidden = true;
+    t.elapsedEl.textContent = '';
+  }
 
   if (Array.isArray(u.content)) {
     // ACP sends the full content array on each update (replace semantics)
@@ -858,10 +917,97 @@ function showPermissionRequest(id, params) {
 
 function setBusy(busy) {
   state.busy = busy;
+  if (busy && !state.turnStartedAt) state.turnStartedAt = Date.now();
+  if (!busy) state.turnStartedAt = 0;
+  state.probe = 'idle';
   $('#btn-send').hidden = busy;
   $('#btn-stop').hidden = !busy;
   if (!busy) closeStream();
+  updateTurnStatus();
 }
+
+function fmtDur(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+}
+
+function oldestRunningTool() {
+  let oldest = null;
+  for (const t of state.tools.values()) {
+    if (!t.running || !t.startedAt) continue;
+    if (!oldest || t.startedAt < oldest.startedAt) oldest = t;
+  }
+  return oldest;
+}
+
+function hasStaleTool() {
+  for (const t of state.tools.values()) if (t.stale) return true;
+  return false;
+}
+
+function cancelTurn() {
+  if (!state.sessionId) return;
+  notify('session/cancel', { sessionId: state.sessionId });
+  addSystemMessage('Cancel requested');
+  for (const t of state.tools.values()) {
+    if (!t.stale && !t.running) continue;
+    t.stale = false;
+    t.running = false;
+    t.card.dataset.status = 'failed';
+    t.elapsedEl.hidden = false;
+    t.elapsedEl.textContent = 'cancelled';
+  }
+  updateTurnStatus();
+}
+
+// One line above the composer that says whether the turn is moving, silent,
+// being probed, or reconnecting — so "slow" and "lost" don't look the same.
+function updateTurnStatus() {
+  const box = $('#turn-status');
+  if (!box) return;
+  const tool = oldestRunningTool();
+  const stale = hasStaleTool();
+  if (!state.busy && !tool && !stale) {    box.hidden = true;
+    box.replaceChildren();
+    return;
+  }
+  box.hidden = false;
+
+  const quiet = state.lastActivity ? Date.now() - state.lastActivity : 0;
+  const turnMs = state.turnStartedAt
+    ? Date.now() - state.turnStartedAt
+    : (tool ? Date.now() - tool.startedAt : 0);
+
+  let text;
+  if (state.probe === 'dead') text = 'no response — reconnecting…';
+  else if (state.probe === 'checking') text = `no update for ${fmtDur(quiet)} — checking connection…`;
+  else if (state.probe === 'alive') text = `server answered · working · ${fmtDur(turnMs)}`;
+  else if (quiet >= STALL_MS) text = `quiet ${fmtDur(quiet)} — checking…`;
+  else if (!state.busy && tool) text = `tool running · ${fmtDur(turnMs)}`;
+  else if (!state.busy && stale) text = 'unfinished tool call from an earlier connection';
+  else text = `working · ${fmtDur(turnMs)}`;
+
+  const parts = [el('span', 'turn-text', text)];
+  // after a reload mid-turn the Stop button is hidden; this is the way out
+  if (!state.busy && (tool || stale)) {
+    const cancel = el('button', 'turn-cancel', 'Cancel');
+    cancel.addEventListener('click', cancelTurn);
+    parts.push(cancel);
+  }
+  const longTool = tool && Date.now() - tool.startedAt >= 5 * 60 * 1000;
+  box.classList.toggle('warn', Boolean(longTool || state.probe === 'dead'));
+  box.replaceChildren(...parts);
+}
+
+setInterval(() => {
+  for (const t of state.tools.values()) {
+    if (!t.elapsedEl || !t.startedAt) continue;
+    const ms = (t.endedAt ?? Date.now()) - t.startedAt;
+    t.elapsedEl.textContent = fmtDur(ms);
+    t.elapsedEl.classList.toggle('warn', ms >= 5 * 60 * 1000);
+  }
+  updateTurnStatus();
+}, 1000);
 
 async function sendPrompt() {
   const input = $('#input');
@@ -1083,6 +1229,38 @@ function updateSessionItem(item, s) {
 /* ------------------------------------------------------------------ */
 /* bottom sheet (mode / model / thinking)                              */
 /* ------------------------------------------------------------------ */
+
+function openConnSheet() {
+  const options = $('#sheet-options');
+  options.innerHTML = '';
+  const wsState = !state.ws ? 'closed'
+    : state.ws.readyState === WebSocket.OPEN ? 'open'
+      : state.ws.readyState === WebSocket.CONNECTING ? 'connecting' : 'closed';
+  const quiet = state.lastActivity ? `${fmtDur(Date.now() - state.lastActivity)} ago` : 'never';
+  const probe = state.probe === 'alive' ? 'answered'
+    : state.probe === 'dead' ? 'no answer'
+      : state.probe === 'checking' ? 'checking…' : 'idle';
+  const rows = [
+    ['Socket', wsState],
+    ['Last message', quiet],
+    ['Liveness probe', probe],
+    ['Session', state.sessionId || 'none'],
+    ['Agent', `${state.agentInfo?.name ?? 'goose'} ${state.agentInfo?.version ?? ''}`.trim()],
+    ['Origin', location.host],
+  ];
+  for (const [k, v] of rows) {
+    const row = el('div', 'conn-row');
+    row.appendChild(el('span', 'conn-key', k));
+    row.appendChild(el('span', 'conn-val', v));
+    options.appendChild(row);
+  }
+  const close = el('button', 'sheet-option', 'Close');
+  close.addEventListener('click', closeSheet);
+  options.appendChild(close);
+  $('#sheet-title').textContent = 'Connection';
+  $('#sheet').classList.add('open');
+  $('#sheet-backdrop').hidden = false;
+}
 
 function openSheet() {
   const options = $('#sheet-options');
@@ -1307,6 +1485,7 @@ function init() {
   });
   $('#drawer-backdrop').addEventListener('click', closeDrawer);
   $('#mode-pill').addEventListener('click', openSheet);
+  $('#conn-dot').addEventListener('click', openConnSheet);
   $('#sheet-backdrop').addEventListener('click', closeSheet);
 
   const c = chat();

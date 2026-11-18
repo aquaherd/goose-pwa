@@ -56,9 +56,10 @@ The installer is idempotent and does six things:
 5. installs `/etc/caddy/goose.caddy` and appends
    `import /etc/caddy/goose.caddy` to the main Caddyfile, validates it and
    reloads Caddy;
-6. adds a log filter to the Caddyfile's global options so `?token=…` is
-   stripped from error-log entries (Caddy logs the request URI when the ACP
-   upstream fails, and the token travels as a query parameter).
+6. adds a log filter to the Caddyfile's global options so `?token=…` and the
+   `X-Secret-Key`, `Cookie` and `Authorization` headers are stripped from
+   error-log entries (Caddy logs the request URI and headers when the ACP
+   upstream fails).
 
 Caddy answers the ACME HTTP-01 challenge on `:80` and requests the
 certificate for `goose.pihole.fritz.box` from
@@ -137,7 +138,13 @@ already.
 ## Features
 
 - Streaming chat (agent text, thinking, plans) with markdown rendering
-- Tool-call cards (status, input, diffs, output), collapsible
+- Tool-call cards (status, input, diffs, output, live elapsed time), collapsible
+- A turn-status line that distinguishes *working* from *quiet* from
+  *reconnecting*, and a liveness probe result, so a slow turn and a dead socket
+  never look the same; a running tool left over from before a reload can be
+  cancelled from the app
+- Connection sheet (tap the status dot): socket state, last message age, probe
+  result, session and agent version
 - **Permission prompts** inline (allow once/always, reject once/always) —
   switch modes (`auto`, `approve`, `smart_approve`, `chat`) from the header pill
 - Model / thinking-effort pickers (`session/set_config_option`)
@@ -189,12 +196,17 @@ prefer keeping them together.
 
 ## Known limitations
 
-- If the WebSocket drops **while a prompt is streaming**, the in-flight
-  chunks are lost; the turn still completes server-side and appears after the
-  client reconnects and reloads the session. (goose serve assigns
-  `acp-connection-id`s but offers no browser-usable resumption.)
+- If goose notices the disconnect (a clean close, e.g. a page reload), the
+  in-flight turn is **aborted, not finished**: the session keeps the partial
+  history, an unfinished tool call is replayed as *unfinished*, and anything
+  produced after the drop is lost. A turn only keeps running while the server
+  still holds a connection — typically a suspended phone whose socket Caddy
+  has not torn down yet. The liveness probe targets that case, and the
+  turn-status line now distinguishes slow from unreachable.
+- goose serve offers no resumption, so chunks streamed while the client was
+  away cannot be replayed.
 - A permission prompt that is pending exactly when the socket dies is
-  stranded; cancel/retry the turn after reconnecting.
+  stranded; reconnect and cancel the turn.
 - The settings sheet uses `_goose/unstable/...` extension methods, which can
   change between goose releases. The installer pins the goose version this
   client was tested against.

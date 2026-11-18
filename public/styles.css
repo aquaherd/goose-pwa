@@ -124,6 +124,9 @@ html, body {
 .dot-busy { background: var(--warn); }
 .dot-down { background: var(--err); }
 
+#conn-dot { cursor: pointer; position: relative; }
+#conn-dot::after { content: ""; position: absolute; inset: -10px; }
+
 /* ---------- chat ---------- */
 
 #chat {
@@ -347,6 +350,7 @@ html, body {
 }
 .tool[data-status="completed"] .tool-status { background: var(--ok); }
 .tool[data-status="failed"] .tool-status { background: var(--err); }
+.tool[data-status="stale"] .tool-status { background: var(--text-dim); animation: none; }
 
 .tool-title {
   flex: 1;
@@ -358,6 +362,14 @@ html, body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+.tool-elapsed {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.tool-elapsed.warn { color: var(--warn); }
 
 .tool-chevron { color: var(--text-dim); transition: transform 0.15s; flex: none; }
 .tool.open .tool-chevron { transform: rotate(90deg); }
@@ -431,6 +443,28 @@ html, body {
   background: var(--bg-raised);
   border-top: 1px solid var(--border);
   position: relative;
+}
+
+#turn-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 6px 7px;
+  font-size: 12px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+#turn-status.warn .turn-text { color: var(--warn); }
+.turn-text { flex: 1; min-width: 0; }
+.turn-cancel {
+  flex: none;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
 }
 
 #composer-row {
@@ -616,6 +650,26 @@ html, body {
 }
 .sheet-option.selected { border-color: var(--accent); }
 .sheet-option .desc { font-size: 12.5px; color: var(--text-dim); }
+
+/* connection details */
+.conn-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 9px 2px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+.conn-key { flex: none; width: 110px; color: var(--text-dim); }
+.conn-val {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+#sheet-options .conn-row:last-of-type { border-bottom: none; margin-bottom: 10px; }
 
 /* extensions */
 .ext-row {

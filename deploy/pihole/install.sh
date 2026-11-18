@@ -125,7 +125,7 @@ PY
 fi
 
 step "Caddy log redaction"
-if grep -q "goose-pwa: redact" "$CADDY_MAIN"; then
+if grep -q "request>headers>X-Secret-Key" "$CADDY_MAIN"; then
 	echo "already present"
 else
 	cp -a "$CADDY_MAIN" "$CADDY_MAIN.bak-$(date +%Y%m%d%H%M%S)"
@@ -134,13 +134,19 @@ import re, sys
 
 path = sys.argv[1]
 src = open(path).read()
+# replace an older, query-only variant of this block if one is present
+src = re.sub(r"\n\t# goose-pwa: redact.*?\n\t\}\n", "\n", src, count=1, flags=re.S)
 block = (
-    "\t# goose-pwa: redact the WebSocket secret from error logs. Caddy logs\n"
-    "\t# the request URI on proxy errors, and the ACP token travels as ?token=.\n"
+    "\t# goose-pwa: redact secrets from error logs. Caddy logs the request\n"
+    "\t# URI and headers on proxy errors; the ACP token travels as ?token=\n"
+    "\t# and the app also sends X-Secret-Key on the preflight.\n"
     "\tlog {\n"
     "\t\tformat filter {\n"
     "\t\t\twrap json\n"
     "\t\t\tfields {\n"
+    "\t\t\t\trequest>headers>X-Secret-Key delete\n"
+    "\t\t\t\trequest>headers>Cookie delete\n"
+    "\t\t\t\trequest>headers>Authorization delete\n"
     "\t\t\t\trequest>uri query {\n"
     "\t\t\t\t\tdelete token\n"
     "\t\t\t\t}\n"
@@ -152,7 +158,7 @@ m = re.search(r"(?ms)^\{[ \t]*\n(.*?)^\}", src)
 if not m:
     sys.exit("error: global options block not found in " + path)
 open(path, "w").write(src[: m.end(1)] + block + src[m.end(1):])
-print("added token redaction to the global options block")
+print("added header/query redaction to the global options block")
 PY
 fi
 
