@@ -148,7 +148,8 @@ already.
 - Per-session extension toggles (builtin/platform/MCP) in the settings sheet,
   via goose's `_goose/unstable/session/extensions/{list,add,remove}` methods
 - Reconnect handling: on socket loss the client reconnects, re-runs
-  `initialize` and reloads the session via `session/load`
+  `initialize` and reloads the session via `session/load`; a liveness probe
+  catches sockets iOS killed silently while the app was suspended
 - PWA: installable, app-shell cache, safe-area insets, no focus-zoom,
   keyboard-aware scrolling
 

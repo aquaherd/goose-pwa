@@ -160,6 +160,9 @@ const state = {
   ws: null,
   reconnects: 0,
   pinned: true,
+  lastActivity: 0,  // last message from the server, for the liveness probe
+  probing: false,
+  stalled: false,
 };
 
 let rpcCounter = 1;
@@ -233,8 +236,12 @@ function hideAuthForm() {
 async function preflight() {
   // GET /acp-preflight (Caddy strips Origin and forwards to /acp):
   //   406 = key ok   404/401 = key missing/wrong   403 = origin rejected
+  // Bound it: a suspended server must not leave a fetch hanging forever.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8000);
   try {
     const res = await fetch('/acp-preflight', {
+      signal: ctrl.signal,
       headers: state.token ? { 'X-Secret-Key': state.token } : {},
     });
     if (res.status === 406) return 'ok';
@@ -243,14 +250,19 @@ async function preflight() {
     return 'down:' + res.status;
   } catch {
     return 'down';
+  } finally {
+    clearTimeout(timer);
   }
 }
 
 async function connect() {
+  setConnState('starting');
   if (state.ws) {
     state.ws.onclose = null;
     state.ws.close();
     state.ws = null;
+    // a request in flight must not hang until its timeout
+    failPending('connection lost');
   }
 
   const check = await preflight();
@@ -289,6 +301,7 @@ async function connect() {
   ws.onopen = async () => {
     opened = true;
     state.reconnects = 0;
+    state.lastActivity = Date.now();
     try {
       const init = await rpc('initialize', {
         protocolVersion: 1,
@@ -312,6 +325,7 @@ async function connect() {
   };
 
   ws.onmessage = (e) => {
+    state.lastActivity = Date.now();
     let msg;
     try {
       msg = JSON.parse(e.data);
@@ -336,11 +350,7 @@ async function connect() {
       return;
     }
     // fail all in-flight requests so the UI unblocks
-    for (const [id, p] of state.pending) {
-      clearTimeout(p.timer);
-      p.reject(new Error('connection lost'));
-    }
-    state.pending.clear();
+    failPending('connection lost');
     scheduleReconnect();
   };
 
@@ -357,6 +367,70 @@ function setConnState(s) {
   dot.className = 'dot ' + (s === 'ready' ? 'dot-ok' : s === 'starting' ? 'dot-busy' : 'dot-down');
   dot.title = `goose: ${s}`;
 }
+
+function failPending(reason) {
+  for (const [, p] of state.pending) {
+    clearTimeout(p.timer);
+    p.reject(new Error(reason));
+  }
+  state.pending.clear();
+}
+
+/* Liveness. iOS suspends the PWA and can drop the socket without firing
+ * onclose, leaving it OPEN and silent. While a turn runs, probe after a long
+ * quiet period; when the app returns to the foreground, reconnect if the
+ * socket is gone. */
+
+const STALL_MS = 30_000;
+
+async function probeConnection() {
+  if (state.probing) return;
+  const ws = state.ws;
+  if (!ws || ws.readyState === WebSocket.CONNECTING) return;
+  if (ws.readyState !== WebSocket.OPEN) {
+    connect();
+    return;
+  }
+  state.probing = true;
+  state.lastActivity = Date.now(); // one probe per quiet period
+  try {
+    await rpc('session/list', {}, { timeoutMs: 8000 });
+  } catch {
+    if (state.ws !== ws) return;
+    state.stalled = true;
+    addSystemMessage('Connection stalled — reconnecting…', true);
+    connect();
+  } finally {
+    state.probing = false;
+  }
+}
+
+function resumeConnection() {
+  const ws = state.ws;
+  if (ws && ws.readyState === WebSocket.CONNECTING) return;
+  if (!ws || ws.readyState === WebSocket.CLOSED) {
+    state.reconnects = 0;
+    connect();
+    return;
+  }
+  if (Date.now() - state.lastActivity > STALL_MS) probeConnection();
+}
+
+setInterval(() => {
+  if (!state.busy || state.probing) return;
+  if (Date.now() - state.lastActivity < STALL_MS) return;
+  probeConnection();
+}, 10_000);
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  resumeConnection();
+  maybeScroll();
+});
+
+window.addEventListener('pageshow', (e) => {
+  if (e.persisted) resumeConnection();
+});
 
 /* ------------------------------------------------------------------ */
 /* session lifecycle                                                   */
@@ -817,8 +891,10 @@ async function sendPrompt() {
       if (result.stopReason !== 'cancelled') addSystemMessage(`stopped: ${result.stopReason}`);
     }
   } catch (err) {
-    addSystemMessage(err.message, true);
+    // a stall already reported the reconnect; don't stack a second message
+    if (!state.stalled) addSystemMessage(err.message, true);
   } finally {
+    state.stalled = false;
     setBusy(false);
     refreshSessionTitle();
   }
