@@ -142,7 +142,8 @@ already.
 - A turn-status line that distinguishes *working* from *quiet* from
   *reconnecting*, and a liveness probe result, so a slow turn and a dead socket
   never look the same; a running tool left over from before a reload can be
-  cancelled from the app
+  cancelled from the app, and a cancellation is remembered per session so it
+  does not come back when you switch away and return
 - Connection sheet (tap the status dot): socket state, last message age, probe
   result, session and agent version
 - **Permission prompts** inline (allow once/always, reject once/always) —

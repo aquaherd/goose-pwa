@@ -762,13 +762,15 @@ function upsertToolCall(u) {
     // During replay, a call with no completing update stays unfinished.
     const replayed = state.replaying;
     const settled = u.status === 'completed' || u.status === 'failed';
-    const started = !replayed && !settled;
+    const cancelled = !settled && isToolCancelled(state.sessionId, id);
+    const started = !replayed && !settled && !cancelled;
     t = {
-      card, body, title, contentEl: null,
+      card, body, title, contentEl: null, id,
       startedAt: started ? Date.now() : 0,
       endedAt: 0,
       running: started,
-      stale: replayed && !settled,
+      stale: replayed && !settled && !cancelled,
+      cancelled,
       elapsedEl,
     };
     state.tools.set(id, t);
@@ -779,13 +781,18 @@ function upsertToolCall(u) {
   if (u.title) t.title.textContent = shortTitle(u.title);
   if (u.status) {
     const running = u.status === 'in_progress' || u.status === 'pending';
+    const settled = u.status === 'completed' || u.status === 'failed';
+    if (settled && t.cancelled) {
+      forgetCancelled(state.sessionId, t.id);
+      t.cancelled = false;
+    }
     if (running && state.replaying) {
       // replayed mid-turn state: the connection that owned this turn is gone,
       // so label it unfinished instead of pretending it is running
       t.stale = true;
       t.running = false;
       t.card.dataset.status = 'stale';
-    } else {
+    } else if (!t.cancelled) {
       t.stale = false;
       t.card.dataset.status = u.status;
       if (running) {
@@ -797,7 +804,12 @@ function upsertToolCall(u) {
       }
     }
   }
-  if (t.stale) {
+  if (t.cancelled) {
+    t.card.dataset.status = 'failed';
+    t.elapsedEl.hidden = false;
+    t.elapsedEl.textContent = 'cancelled';
+    t.elapsedEl.classList.remove('warn');
+  } else if (t.stale) {
     t.elapsedEl.hidden = false;
     t.elapsedEl.textContent = 'unfinished';
     t.elapsedEl.classList.remove('warn');
@@ -945,12 +957,50 @@ function hasStaleTool() {
   return false;
 }
 
+/* A cancel is local: goose keeps the unfinished tool_call in the session, so
+ * every reload/switch replays it. Remember which calls the user cancelled so
+ * the prompt does not come back on the next load. */
+const CANCELLED_KEY = 'cancelledTools';
+
+function cancelledMap() {
+  const v = store.get(CANCELLED_KEY, {});
+  return v && typeof v === 'object' ? v : {};
+}
+
+function isToolCancelled(sessionId, toolCallId) {
+  if (!sessionId || !toolCallId) return false;
+  const list = cancelledMap()[sessionId];
+  return Array.isArray(list) && list.includes(toolCallId);
+}
+
+function rememberCancelled(sessionId, toolCallId) {
+  if (!sessionId || !toolCallId) return;
+  const all = cancelledMap();
+  const list = Array.isArray(all[sessionId]) ? all[sessionId] : [];
+  if (list.includes(toolCallId)) return;
+  list.push(toolCallId);
+  all[sessionId] = list.slice(-50); // keep it bounded
+  store.set(CANCELLED_KEY, all);
+}
+
+function forgetCancelled(sessionId, toolCallId) {
+  const all = cancelledMap();
+  const list = all[sessionId];
+  if (!Array.isArray(list)) return;
+  const next = list.filter((x) => x !== toolCallId);
+  if (next.length) all[sessionId] = next;
+  else delete all[sessionId];
+  store.set(CANCELLED_KEY, all);
+}
+
 function cancelTurn() {
   if (!state.sessionId) return;
   notify('session/cancel', { sessionId: state.sessionId });
   addSystemMessage('Cancel requested');
   for (const t of state.tools.values()) {
     if (!t.stale && !t.running) continue;
+    rememberCancelled(state.sessionId, t.id);
+    t.cancelled = true;
     t.stale = false;
     t.running = false;
     t.card.dataset.status = 'failed';
